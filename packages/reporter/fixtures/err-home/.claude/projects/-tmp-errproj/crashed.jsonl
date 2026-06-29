@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":20},"content":[{"type":"text","text":"working"}]}}
+{"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"API Error: 500 Internal server error"}]}}

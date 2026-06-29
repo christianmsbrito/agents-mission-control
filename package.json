@@ -1,0 +1,26 @@
+{
+  "name": "agents-mission-control",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "dev": "bun run scripts/dev.ts",
+    "dev:server": "bun run packages/server/src/index.ts",
+    "dev:reporter": "bun run packages/reporter/src/index.ts",
+    "mcp:router": "bun run packages/server/src/mcp.ts",
+    "build:web": "bun run packages/web/build.ts",
+    "build:reporter": "bun build --compile packages/reporter/src/index.ts --outfile dist/mc-reporter",
+    "install:codex-hook": "bun run scripts/install-codex-hook.ts",
+    "install:claude-hook": "bun run scripts/install-claude-hook.ts",
+    "backfill": "bun run scripts/backfill.ts",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.2"
+  }
+}

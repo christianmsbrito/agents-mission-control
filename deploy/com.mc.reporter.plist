@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- macOS launchd unit. Edit paths/env, then:
+     cp deploy/com.mc.reporter.plist ~/Library/LaunchAgents/
+     launchctl load ~/Library/LaunchAgents/com.mc.reporter.plist -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.mc.reporter</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/dist/mc-reporter</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MC_SERVER_URL</key><string>wss://hub.your-tailnet.ts.net:7777/ws/report</string>
+    <key>MC_TOKEN</key><string>CHANGE-ME</string>
+    <key>MC_HOST_LABEL</key><string>macbook</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardErrorPath</key><string>/tmp/mc-reporter.log</string>
+  <key>StandardOutPath</key><string>/tmp/mc-reporter.log</string>
+</dict>
+</plist>

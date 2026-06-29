@@ -1,0 +1,985 @@
+/* ======================================================================
+   AGENTS MISSION CONTROL — RPG board
+   Theme-tokened. First skin: "ff" (Final Fantasy 16-bit party menu).
+   Add a skin by overriding the token block under [data-skin="…"].
+   ====================================================================== */
+
+/* ---- FF skin tokens ---- */
+[data-skin="ff"] {
+  --bg0: #05060f;
+  --bg1: #0a0e22;
+  --ink: #eef2ff;
+  --ink-dim: #9fb2ea;
+  --ink-faint: #5d6ba0;
+
+  --gold: #ffd56b;
+  --gold-deep: #c4912f;
+  --gold-glow: #ffe9a8;
+
+  --win-top: #2a47bd;
+  --win-bot: #0b1654;
+  --win-edge: #6f8be0;
+  --frame: #f3f6ff;
+  --frame-dark: #0a1130;
+
+  --hp: #4dffa0;
+  --hp-low: #ff6172;
+  --mp: #7cb8ff;
+
+  --battle: #4dff9b;
+  --awaiting: #ffcf45;
+  --ko: #ff5366;
+  --resting: #8294c8;
+
+  /* raised controls (nav/buttons/cmd), chip bg, modal backdrop */
+  --btn-top: #1b2a6a;
+  --btn-bot: #0a1340;
+  --chip-bg: rgba(10, 18, 56, 0.7);
+  --overlay: rgba(2, 4, 14, 0.7);
+  /* recessed surfaces (bar grooves, inputs, quest strip). Dark themes keep this a
+     black inset; LIGHT themes must override to a translucent dark tint. */
+  --sunken: rgba(0, 0, 0, 0.4);
+
+  --radius: 8px;
+  /* pixel face: LOGO ONLY (unreadable at small sizes). Everything else uses the
+     legible mono — the FF identity lives in the window chrome + palette, not the font. */
+  --font-pixel: "Press Start 2P", monospace;
+  --font-display: "IBM Plex Mono", ui-monospace, monospace; /* headings/labels (600-700) */
+  --font-body: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+/* ---- "terminal" skin: green-phosphor CRT ---- */
+[data-skin="terminal"] {
+  --bg0: #05080a;
+  --bg1: #0a1410;
+  --ink: #ccffd4;
+  --ink-dim: #6fae7e;
+  --ink-faint: #3f6b4a;
+
+  --gold: #ffcf5a;
+  --gold-deep: #b8862b;
+  --gold-glow: #ffe79a;
+
+  --win-top: #0c2016;
+  --win-bot: #06100a;
+  --win-edge: #2f7d4a;
+  --frame: #58e08a;
+  --frame-dark: #04130a;
+
+  --hp: #57ff86;
+  --hp-low: #ff5050;
+  --mp: #4ee6cf;
+
+  --battle: #57ff86;
+  --awaiting: #ffd24a;
+  --ko: #ff5050;
+  --resting: #6fae7e;
+
+  --btn-top: #0e2418;
+  --btn-bot: #06120b;
+  --chip-bg: rgba(12, 36, 22, 0.7);
+  --overlay: rgba(2, 8, 4, 0.78);
+  --sunken: rgba(0, 0, 0, 0.45);
+
+  --radius: 4px;
+  --font-pixel: "VT323", monospace;
+  --font-display: "IBM Plex Mono", ui-monospace, monospace;
+  --font-body: "IBM Plex Mono", ui-monospace, monospace;
+}
+[data-skin="terminal"] body::before {
+  content: ""; position: fixed; inset: 0; z-index: -2;
+  background: radial-gradient(70vw 70vw at 50% 38%, rgba(40, 130, 70, 0.14), transparent 70%), var(--bg0);
+}
+/* CRT scanlines */
+[data-skin="terminal"] body::after {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: 0.35;
+  background-image: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.5) 0 1px, transparent 1px 3px);
+}
+
+/* ---- reset ---- */
+*,
+*::before,
+*::after { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: var(--bg0);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 15px;
+  line-height: 1.5;
+  overflow: hidden; /* app owns its own scroll regions */
+}
+h1, h2, h3, h4 { margin: 0; font-weight: 400; }
+button { font-family: inherit; color: inherit; cursor: pointer; }
+input, textarea { font-family: inherit; }
+::selection { background: var(--gold); color: var(--frame-dark); }
+
+/* Atmosphere is per-skin (scoped under [data-skin]). Each theme paints its own
+   backdrop on body::before/::after; a new skin may override or blank these. */
+[data-skin="ff"] body::before {
+  content: "";
+  position: fixed;
+  inset: -20%;
+  z-index: -2;
+  background:
+    radial-gradient(40vw 40vw at 78% 12%, rgba(120, 90, 220, 0.22), transparent 60%),
+    radial-gradient(50vw 50vw at 12% 88%, rgba(40, 80, 200, 0.18), transparent 60%),
+    radial-gradient(80vw 80vw at 50% 50%, #0a1030 0%, var(--bg0) 70%);
+}
+[data-skin="ff"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.5;
+  background-image: radial-gradient(1px 1px at 20px 30px, rgba(255, 255, 255, 0.35) 50%, transparent),
+    radial-gradient(1px 1px at 120px 80px, rgba(255, 255, 255, 0.25) 50%, transparent),
+    radial-gradient(1px 1px at 70px 160px, rgba(255, 255, 255, 0.3) 50%, transparent),
+    radial-gradient(1px 1px at 200px 120px, rgba(255, 255, 255, 0.2) 50%, transparent);
+  background-size: 240px 200px;
+  animation: drift 120s linear infinite;
+}
+@keyframes drift { to { background-position: 240px 200px; } }
+
+/* ======================================================================
+   WINDOW — the FF menu panel: gradient blue fill, white double frame
+   ====================================================================== */
+.win {
+  position: relative;
+  background: linear-gradient(160deg, var(--win-top), var(--win-bot));
+  border: 2px solid var(--frame);
+  border-radius: var(--radius);
+  box-shadow:
+    0 0 0 2px var(--frame-dark),
+    inset 0 0 0 1px color-mix(in srgb, var(--win-edge) 45%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 10px 26px rgba(0, 0, 0, 0.55);
+}
+
+/* ======================================================================
+   APP SHELL
+   ====================================================================== */
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px clamp(12px, 3vw, 30px) 0;
+  max-width: 1500px;
+  margin: 0 auto;
+}
+.app > .scroll { flex: 1; }
+
+/* ---- title bar ---- */
+.topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.brand {
+  font-family: var(--font-pixel);
+  font-size: clamp(11px, 2.6vw, 15px);
+  letter-spacing: 1px;
+  color: var(--gold);
+  text-shadow: 2px 2px 0 var(--frame-dark), 0 0 12px rgba(255, 213, 107, 0.35);
+  -webkit-font-smoothing: none;
+  image-rendering: pixelated;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+.brand .crest { font-size: 20px; filter: drop-shadow(0 0 6px var(--gold)); }
+
+.nav { display: flex; gap: 6px; }
+.nav button {
+  background: linear-gradient(160deg, var(--btn-top), var(--btn-bot));
+  border: 2px solid var(--win-edge);
+  border-radius: 6px;
+  color: var(--ink-dim);
+  padding: 7px 15px;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  transition: transform 0.08s, color 0.12s, border-color 0.12s;
+}
+.nav button:hover { color: var(--ink); transform: translateY(-1px); }
+.nav button[aria-pressed="true"] {
+  color: var(--gold);
+  border-color: var(--gold);
+  box-shadow: 0 0 0 2px var(--frame-dark), inset 0 0 10px rgba(255, 213, 107, 0.25);
+}
+
+.spacer { flex: 1; }
+
+.conn { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-dim); }
+.conn .orb { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+.conn[data-s="online"] .orb { background: var(--battle); color: var(--battle); }
+.conn[data-s="connecting"] .orb { background: var(--awaiting); color: var(--awaiting); animation: blink 1s steps(2) infinite; }
+.conn[data-s="offline"] .orb { background: var(--ko); color: var(--ko); }
+@keyframes blink { 50% { opacity: 0.25; } }
+
+.icon-btn {
+  background: linear-gradient(160deg, var(--btn-top), var(--btn-bot));
+  border: 2px solid var(--win-edge);
+  border-radius: 6px;
+  color: var(--ink-dim);
+  width: 34px; height: 32px;
+  font-size: 15px;
+  display: grid; place-items: center;
+}
+.icon-btn:hover { color: var(--gold); border-color: var(--gold); }
+
+/* ======================================================================
+   COMMAND BAR — search + facet chips
+   ====================================================================== */
+.cmdbar { display: flex; flex-direction: column; gap: 10px; }
+.searchrow { display: flex; gap: 10px; align-items: center; }
+.search {
+  flex: 1;
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px;
+}
+.search .cur { color: var(--gold); animation: blink 1s steps(2) infinite; }
+.search input {
+  flex: 1;
+  background: none; border: none; outline: none;
+  color: var(--ink); font-size: 15px;
+}
+.search input::placeholder { color: var(--ink-faint); }
+
+.facets { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.facetgroup { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.facetgroup > .lbl {
+  font-family: var(--font-display); font-size: 11px; font-weight: 600; color: var(--ink-faint);
+  letter-spacing: 0.5px; margin-right: 2px; text-transform: uppercase;
+}
+.chip {
+  background: var(--chip-bg);
+  border: 1.5px solid var(--win-edge);
+  border-radius: 5px;
+  color: var(--ink-dim);
+  padding: 4px 9px;
+  font-size: 12px;
+  display: inline-flex; gap: 6px; align-items: center;
+  white-space: nowrap;
+  transition: all 0.1s;
+}
+.chip:hover { color: var(--ink); border-color: var(--gold); }
+.chip[aria-pressed="true"] {
+  color: var(--frame-dark); background: var(--gold); border-color: var(--gold-glow);
+  font-weight: bold;
+}
+.chip .n { font-size: 10px; opacity: 0.7; }
+.chip[aria-pressed="true"] .n { opacity: 0.85; }
+
+/* ======================================================================
+   DASHBOARD strip — party stats + leaderboard + spend chart
+   ====================================================================== */
+.dash { display: grid; grid-template-columns: auto 1.1fr auto; gap: 12px; }
+@media (max-width: 1100px) { .dash { grid-template-columns: 1fr; } }
+.panel { padding: 12px 14px; }
+.panel > .cap {
+  font-family: var(--font-display); font-size: 12px; font-weight: 700; color: var(--gold);
+  letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 10px;
+  display: flex; align-items: center; gap: 6px;
+}
+
+.statgrid { display: grid; grid-template-columns: repeat(4, minmax(64px, 1fr)); gap: 10px 14px; }
+.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat .v { font-family: var(--font-display); font-weight: 700; font-size: 19px; color: var(--ink); line-height: 1.2; }
+.stat .k { font-size: 12px; color: var(--ink-dim); }
+.stat[data-tone="battle"] .v { color: var(--battle); }
+.stat[data-tone="awaiting"] .v { color: var(--awaiting); }
+.stat[data-tone="ko"] .v { color: var(--ko); }
+.stat[data-tone="gold"] .v { color: var(--gold); }
+
+.board { display: flex; flex-direction: column; gap: 5px; }
+.board .row {
+  display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: center;
+  font-size: 13px; padding: 2px 0;
+}
+.board .row .rank { color: var(--gold-deep); font-family: var(--font-display); font-weight: 700; font-size: 12px; }
+.board .row .who { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board .row .who small { color: var(--ink-faint); }
+.board .row .amt { color: var(--gold); font-variant-numeric: tabular-nums; }
+
+/* spend chart */
+.chart { width: 100%; display: block; }
+.chart .area { fill: color-mix(in srgb, var(--mp) 20%, transparent); }
+.chart .line { fill: none; stroke: var(--mp); stroke-width: 2; }
+.chart .gline { stroke: color-mix(in srgb, var(--win-edge) 22%, transparent); stroke-width: 1; }
+.chart .glabel { fill: var(--ink-faint); font-size: 9px; font-family: var(--font-body); }
+
+/* compact live-counts strip on the party (monitoring) page */
+.livestrip { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; padding: 8px 14px; }
+.pill {
+  display: inline-flex; align-items: baseline; gap: 5px; font-size: 12px; color: var(--ink-dim);
+  padding: 3px 10px; border-radius: 5px; background: var(--sunken); border: 1.5px solid var(--win-edge);
+}
+.pill b { font-family: var(--font-display); font-size: 14px; font-weight: 700; color: var(--ink); }
+.pill.battle b { color: var(--battle); }
+.pill.awaiting b { color: var(--awaiting); }
+.pill.ko b { color: var(--ko); }
+.pill.gold b { color: var(--gold); }
+/* State pills that double as quick filters (party view) */
+.pill.filter { cursor: pointer; font: inherit; font-size: 12px; transition: border-color 0.1s, background 0.1s, color 0.1s; }
+.pill.filter:hover { color: var(--ink); border-color: var(--gold); }
+.pill.filter:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.pill.filter[data-active] {
+  color: var(--ink); border-color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 16%, var(--sunken));
+}
+
+/* ======================================================================
+   PARTY BOARD — the live grid of character cards
+   ====================================================================== */
+.scroll { overflow-y: auto; padding-bottom: 24px; min-height: 0; }
+.scroll::-webkit-scrollbar { width: 10px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--win-edge); border-radius: 6px; border: 2px solid var(--bg0); }
+.scroll::-webkit-scrollbar-track { background: transparent; }
+
+.party {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr));
+  gap: 14px;
+}
+.party.compact { grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); }
+
+.realm-head {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: 12px;
+  margin: 6px 2px 0;
+  font-family: var(--font-display); font-size: 13px; font-weight: 700; color: var(--gold);
+  letter-spacing: 0.5px; text-transform: uppercase;
+}
+.realm-head::after { content: ""; flex: 1; height: 2px; background: linear-gradient(90deg, var(--gold-deep), transparent); }
+.realm-head .ct { color: var(--ink-faint); font-size: 12px; font-weight: 400; }
+
+/* ---- character card ---- */
+.char {
+  --hue: 220;
+  position: relative;
+  padding: 12px 13px 11px;
+  display: flex; flex-direction: column; gap: 9px;
+  /* fill the grid cell (grid rows are align-items:stretch by default, so all
+     cards in a row share the tallest card's height) so margin-top:auto on the
+     bottom action row can pin it flush to the bottom edge across every card. */
+  height: 100%;
+  transition: transform 0.1s;
+}
+.char::before { /* selection cursor */
+  content: "▶";
+  position: absolute; left: -14px; top: 16px;
+  color: var(--gold); font-size: 12px; opacity: 0;
+  transform: translateX(-4px); transition: all 0.12s;
+}
+.char:hover { transform: translateY(-2px); }
+.char:hover::before { opacity: 1; transform: translateX(0); }
+
+.char[data-state="battle"] { box-shadow: 0 0 0 2px var(--frame-dark), 0 0 22px color-mix(in srgb, var(--battle) 48%, transparent), inset 0 0 0 1.5px color-mix(in srgb, var(--battle) 70%, transparent), 0 10px 26px rgba(0,0,0,.5); }
+.char[data-state="awaiting"] { box-shadow: 0 0 0 2px var(--frame-dark), 0 0 20px color-mix(in srgb, var(--awaiting) 50%, transparent), inset 0 0 0 1.5px color-mix(in srgb, var(--awaiting) 78%, transparent), 0 10px 26px rgba(0,0,0,.5); }
+.char[data-state="ko"] { filter: saturate(0.85); box-shadow: 0 0 0 2px var(--frame-dark), 0 0 22px color-mix(in srgb, var(--ko) 52%, transparent), inset 0 0 0 1.5px color-mix(in srgb, var(--ko) 78%, transparent), 0 10px 26px rgba(0,0,0,.5); }
+.char[data-state="resting"] { opacity: 0.86; }
+
+/* Focused hero = the session in the foreground on its host. Reads as a clearly
+   different colour from its neighbours: a translucent --gold fill tinted over the
+   card gradient + a solid --gold outline ring. Both derive from per-skin --gold
+   tokens via color-mix, so each theme tints in its own palette. Uses outline (not
+   box-shadow) so the focus ring stacks with the data-state status glow instead of
+   competing with it. Static — no animation, so prefers-reduced-motion is a no-op. */
+.char[data-focused] {
+  background-image:
+    linear-gradient(160deg, color-mix(in srgb, var(--gold) 16%, transparent), color-mix(in srgb, var(--gold) 7%, transparent)),
+    linear-gradient(160deg, var(--win-top), var(--win-bot));
+  outline: 2px solid color-mix(in srgb, var(--gold) 80%, transparent);
+  outline-offset: 1px;
+}
+.char[data-focused] .char-name .crown {
+  color: var(--gold-glow);
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--gold) 60%, transparent));
+}
+
+/* Chat balloon: the hero's most recent line, floated over the TOP-RIGHT corner so
+   it reads at a glance. Negative offset pops it out of the corner (card has no
+   overflow:hidden — same trick the awaiting ::after / ::before cursor use) so it
+   clears the LV badge below and never collides with the crown (left of the name).
+   data-kind tints it by signal — warn=--ko, ask=--awaiting, say=neutral --win-edge —
+   all per-skin tokens via color-mix, so it themes in both ff & terminal. Static
+   (no animation): the awaiting pulse already owns motion, we don't duplicate it. */
+.char .speech {
+  position: absolute; top: -11px; right: 12px; z-index: 2;
+  max-width: 72%;
+  /* flex ROW: glyph + text sit on one line collapsed. align-items:flex-start so
+     when the bubble expands to multi-line the glyph stays pinned to the FIRST line
+     (next to the text) instead of floating to the vertical center. */
+  display: flex; align-items: flex-start; gap: 5px;
+  padding: 4px 9px;
+  font-family: var(--font-body); font-size: 11.5px; line-height: 1.25; color: var(--ink);
+  background: linear-gradient(160deg, var(--win-top), var(--win-bot));
+  border: 1.5px solid var(--tone, var(--win-edge));
+  border-radius: 9px;
+  box-shadow: 0 3px 9px rgba(0,0,0,.45), inset 0 0 0 1px color-mix(in srgb, var(--tone, var(--win-edge)) 30%, transparent);
+  cursor: pointer; /* click/tap toggles the full-message expand */
+  /* soft grow on expand: size/padding only (no box-shadow flicker). */
+  transition: max-width .19s ease-out, max-height .19s ease-out, padding .19s ease-out, background-color .19s ease-out;
+}
+/* glyph: non-shrinking inline item, nudged to baseline-align with the first text line. */
+.char .speech .sglyph { flex: none; font-size: 11px; line-height: 1.25; color: var(--tone, var(--ink-dim)); }
+/* one-line clip window; the inner .sroll holds the full text and is what marquees.
+   text-overflow:ellipsis on .stxt is the static fallback when the roll is off
+   (no overflow measured, or prefers-reduced-motion). flex:1 so it takes the rest. */
+.char .speech .stxt {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+/* default: plain inline text so .stxt's text-overflow:ellipsis applies (static fallback).
+   Becomes inline-block only when the roll is active (so it can translateX). */
+.char .speech .sroll { white-space: nowrap; }
+/* the marquee "roll": only when JS measured an overflow (data-overflow) AND the
+   user hasn't asked to reduce motion. Travels the exact overflow distance with a
+   pause at each end, then loops. Duration is length-scaled (--roll-dur) so long
+   messages read slowly. Hover / expand fully RESETS it (see below). */
+@media (prefers-reduced-motion: no-preference) {
+  .char .speech[data-overflow] .stxt { text-overflow: clip; } /* ellipsis off while rolling */
+  .char .speech[data-overflow] .sroll {
+    display: inline-block;
+    animation: speechRoll var(--roll-dur, 12s) linear infinite;
+    will-change: transform;
+  }
+}
+@keyframes speechRoll {
+  0%, 12% { transform: translateX(0); }
+  88%, 100% { transform: translateX(calc(-1 * var(--roll, 0px))); }
+}
+/* reduced-motion fallback: kill the roll, leaving the static ellipsis (.stxt) + title tooltip. */
+@media (prefers-reduced-motion: reduce) {
+  .char .speech[data-overflow] .sroll { animation: none; transform: none; }
+  .char .speech { transition: none; } /* no grow animation under reduced motion */
+}
+/* hover OR click/tap reveals the full message as a clean, self-contained popover:
+   drop the clip, wrap to multiple lines, and FULLY reset the marquee (animation:none
+   + transform:none) so the text starts flush at the left edge — a paused animation
+   would leave a residual translateX that pushes the text out of the bubble (the spill
+   bug). Opaque card-surface bg (--win-top/--win-bot) + stronger shadow + bound height
+   so it reads as a layer floating ON TOP of the header, never merging with it, and
+   grows DOWNWARD (top stays anchored) without running off the card edges. */
+.char .speech[data-overflow]:hover,
+.char .speech[data-expanded] {
+  max-width: 92%; max-height: 50vh; z-index: 5;
+  background: linear-gradient(160deg, var(--win-top), var(--win-bot));
+  box-shadow: 0 6px 18px rgba(0,0,0,.55), inset 0 0 0 1px color-mix(in srgb, var(--tone, var(--win-edge)) 45%, transparent);
+}
+.char .speech[data-overflow]:hover .stxt,
+.char .speech[data-expanded] .stxt {
+  overflow-x: hidden; overflow-y: auto; white-space: normal; word-break: break-word;
+}
+.char .speech[data-overflow]:hover .sroll,
+.char .speech[data-expanded] .sroll {
+  display: inline; white-space: normal; animation: none; transform: none;
+}
+/* the bubble's little tail, pointing down toward the character below */
+.char .speech::after {
+  content: ""; position: absolute; bottom: -5px; right: 16px;
+  width: 8px; height: 8px;
+  background: var(--win-bot);
+  border-right: 1.5px solid var(--tone, var(--win-edge));
+  border-bottom: 1.5px solid var(--tone, var(--win-edge));
+  transform: rotate(45deg);
+}
+.char .speech[data-kind="warn"] { --tone: var(--ko); }
+.char .speech[data-kind="ask"] { --tone: var(--awaiting); }
+.char .speech[data-kind="say"] { --tone: color-mix(in srgb, var(--win-edge) 80%, var(--ink-dim)); }
+
+/* "Awaiting orders" pulse: a transparent overlay whose OPACITY animates
+   (compositor-only — no box-shadow repaint, doesn't restart/flicker when the
+   card re-renders or the list reorders). pointer-events:none keeps it click-through. */
+.char[data-state="awaiting"]::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 24px 1px color-mix(in srgb, var(--awaiting) 70%, transparent);
+  opacity: 0.4;
+  animation: glowPulse 1.8s ease-in-out infinite;
+  will-change: opacity;
+}
+@keyframes glowPulse { 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .char[data-state="awaiting"]::after { animation: none; opacity: 0.7; } }
+
+.char-head { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; }
+.portrait {
+  width: 40px; height: 40px; border-radius: 6px;
+  display: grid; place-items: center;
+  font-size: 20px;
+  background: radial-gradient(circle at 30% 25%, hsla(var(--hue), 70%, 55%, 0.9), hsla(var(--hue), 70%, 22%, 0.95));
+  border: 2px solid var(--frame);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.5), 0 0 8px hsla(var(--hue), 70%, 50%, 0.4);
+  color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.6);
+}
+.char-id { min-width: 0; }
+.char-name {
+  font-family: var(--font-display); font-size: 15px; font-weight: 700; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 6px;
+}
+.char-name .crown { color: var(--gold); font-size: 10px; }
+
+/* The agent's `mc:a<n>` A2A handle, shown as a small dim chip beside the name.
+   Clicking ONLY the chip copies the handle (the name itself still opens the sheet
+   via .char-id onOpen — copyAlias stopPropagations). Hover lifts to --gold to
+   advertise it's clickable; on copy it flips to a gold "✓ copied" for ~1s. All
+   --gold-derived → themes in both skins. */
+.char-name .alias-copy {
+  flex: none; cursor: pointer;
+  font-family: var(--font-mono, var(--font-body)); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--ink-dim);
+  border: 1px solid var(--win-edge); border-radius: 4px;
+  padding: 0 5px; line-height: 1.5;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.char-name .alias-copy:hover { color: var(--gold); border-color: var(--gold-deep); }
+.char-name .alias-copy[data-copied] {
+  color: var(--frame-dark); background: var(--gold); border-color: var(--gold-glow);
+}
+
+.char-class { font-size: 13px; color: var(--ink-dim); }
+.char-class b { color: var(--gold); font-weight: 700; }
+.char-lv {
+  font-size: 12px; color: var(--ink-dim); text-align: right; white-space: nowrap;
+}
+.char-lv b { font-family: var(--font-display); font-size: 16px; font-weight: 700; color: var(--gold); display: block; }
+
+/* state tag */
+.tag {
+  font-family: var(--font-display); font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+  padding: 3px 7px; border-radius: 4px; text-transform: uppercase;
+  border: 1.5px solid currentColor; white-space: nowrap; align-self: start;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+.tag[data-state="battle"] { color: var(--battle); }
+.tag[data-state="awaiting"] { color: var(--awaiting); }
+.tag[data-state="ko"] { color: var(--ko); }
+.tag[data-state="resting"] { color: var(--resting); }
+
+/* bars */
+.bars { display: flex; flex-direction: column; gap: 6px; }
+.bar { display: grid; grid-template-columns: 26px 1fr auto; gap: 8px; align-items: center; font-size: 11px; }
+.bar .blab { font-family: var(--font-display); font-size: 11px; font-weight: 700; color: var(--ink-dim); }
+.bar .track {
+  display: block;
+  height: 12px; border-radius: 3px; overflow: hidden;
+  background: var(--sunken);
+  border: 1.5px solid var(--frame-dark);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
+  position: relative;
+}
+.bar .fill {
+  display: block; /* was inline <span> — width:% was being ignored, so bars looked empty */
+  height: 100%; min-width: 3px; border-radius: 2px 0 0 2px;
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0) 50%);
+  box-shadow: 0 0 6px currentColor;
+  transition: width 0.45s ease;
+}
+.bar .fill.hp { color: var(--hp); }
+.bar .fill.hp.low { color: var(--hp-low); }
+.bar .fill.mp { color: var(--mp); }
+.bar .fill.hp { background-color: var(--hp); }
+.bar .fill.hp.low { background-color: var(--hp-low); }
+.bar .fill.mp { background-color: var(--mp); }
+.bar .val { color: var(--ink-dim); font-variant-numeric: tabular-nums; font-size: 11px; white-space: nowrap; }
+
+/* quest line */
+.quest {
+  display: flex; align-items: flex-start; gap: 7px;
+  font-size: 13px; color: var(--ink);
+  background: var(--sunken);
+  border-left: 3px solid var(--gold);
+  border-radius: 0 4px 4px 0;
+  padding: 5px 8px;
+  min-height: 28px;
+}
+.quest .banner { color: var(--gold); flex: none; }
+/* Show the full session title: wrap onto as many lines as needed instead of
+   clipping with an ellipsis. word-break/overflow-wrap keep a long unbroken token
+   (branch name, path) from overflowing the card width. */
+.quest .txt {
+  flex: 1 1 auto;
+  white-space: normal;
+  overflow: visible;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.quest.none { color: var(--ink-faint); border-left-color: var(--ink-faint); }
+.quest .more { color: var(--ink-faint); font-size: 11px; margin-left: auto; }
+
+/* footer: gil + inventory.
+   Capped to a CONSISTENT height (~2 chip rows) and clipped, so a hero with many
+   tools doesn't make the chip block taller than a hero with few — that variance
+   was what pushed the quest/cost/input rows to different positions card-to-card.
+   The data-driven "+N" overflow chip lives OUTSIDE .inv (in .char-foot, before
+   the chips) so it's always visible/never clipped and keeps reporting the true
+   count of tools beyond the shown slice. align-items:flex-start so the gil + the
+   first chip row align at the top of the fixed box. */
+.char-foot {
+  display: flex; align-items: flex-start; gap: 10px; font-size: 12px; flex-wrap: wrap;
+  min-height: 48px; max-height: 48px; overflow: hidden;
+}
+.gil { color: var(--gold); display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
+.inv { display: flex; gap: 4px; flex-wrap: wrap; min-width: 0; align-content: flex-start; }
+.inv .more { color: var(--ink-faint); font-weight: 700; }
+.inv .item {
+  font-size: 11px; color: var(--ink-dim);
+  background: var(--sunken); border: 1px solid var(--win-edge);
+  border-radius: 3px; padding: 1px 6px;
+}
+.meta { display: flex; gap: 10px; color: var(--ink-faint); font-size: 11px; flex-wrap: wrap; }
+
+/* card actions: prompt + commands.
+   margin-top:auto pins this row to the bottom of the (equal-height) card so the
+   prompt input + buttons line up across every card in a row regardless of how
+   much content sits above. */
+.char-actions { display: flex; gap: 6px; margin-top: auto; }
+.char-actions input {
+  flex: 1; min-width: 0;
+  background: var(--sunken); border: 1.5px solid var(--win-edge);
+  border-radius: 5px; color: var(--ink); padding: 6px 9px; font-size: 13px; outline: none;
+}
+.char-actions input:focus { border-color: var(--gold); }
+.cmd {
+  background: linear-gradient(160deg, var(--btn-top), var(--btn-bot));
+  border: 1.5px solid var(--win-edge); border-radius: 5px;
+  color: var(--ink-dim); padding: 0 10px; font-size: 12px; white-space: nowrap;
+}
+.cmd:hover { color: var(--gold); border-color: var(--gold); }
+.cmd.danger:hover { color: var(--ko); border-color: var(--ko); }
+.cmd.go { color: var(--gold); border-color: var(--gold-deep); }
+
+/* ======================================================================
+   QUEST BOARD (kanban)
+   ====================================================================== */
+.kanban { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+@media (max-width: 900px) { .kanban { grid-template-columns: 1fr; } }
+.column { padding: 12px; display: flex; flex-direction: column; gap: 10px; min-height: 120px; }
+.column > .cap { font-family: var(--font-display); font-size: 13px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; display: flex; gap: 8px; align-items: center; }
+.column[data-c="pending"] > .cap { color: var(--ink-dim); }
+.column[data-c="in_progress"] > .cap { color: var(--awaiting); }
+.column[data-c="completed"] > .cap { color: var(--battle); }
+.column > .cap .n { margin-left: auto; color: var(--ink-faint); }
+.qcard {
+  background: var(--sunken); border: 1.5px solid var(--win-edge);
+  border-radius: 6px; padding: 9px 10px; display: flex; flex-direction: column; gap: 5px;
+}
+.qcard .qsub { font-size: 13px; color: var(--ink); }
+.qcard .qbody { font-size: 11px; color: var(--ink-dim); white-space: pre-wrap; overflow: hidden; max-height: 3.2em; }
+.qcard .qwho { font-size: 11px; color: var(--ink-faint); display: flex; gap: 6px; align-items: center; }
+.qcard .qwho .sig { color: var(--gold); }
+.qcard .qwho.muted { font-style: italic; }
+.qcard .qwho .qtag { border: 1px solid var(--win-edge); border-radius: 3px; padding: 0 4px; font-size: 9px; text-transform: uppercase; color: var(--gold-deep); }
+.qcard .qactions { display: flex; gap: 5px; justify-content: flex-end; opacity: 0; transition: opacity 0.1s; }
+.qcard:hover .qactions { opacity: 1; }
+.qcard .qactions .cmd { padding: 2px 8px; font-size: 12px; }
+.muted { color: var(--ink-faint); }
+/* quest multi-select in the deploy form */
+.quest-pick { display: flex; flex-wrap: wrap; gap: 5px; }
+.quest-pick .chip { text-align: left; }
+/* composer textarea/select reuse drawer input styling within the sheet */
+.sheet textarea, .sheet select, .sheet input[type="text"] {
+  background: var(--sunken); border: 1.5px solid var(--win-edge); border-radius: 5px;
+  color: var(--ink); padding: 7px 9px; font-size: 13px; outline: none; width: 100%;
+}
+.sheet textarea:focus, .sheet select:focus, .sheet input:focus { border-color: var(--gold); }
+
+/* ======================================================================
+   RECORDS / LOGS (history) — sortable table
+   ====================================================================== */
+/* shared column grid for header + rows */
+.rec-head, .rec {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) 132px 78px 76px 78px 96px 34px;
+  gap: 12px; align-items: center;
+}
+
+.rec-toolbar {
+  display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.rec-toolbar .facets { flex: 1; min-width: 200px; }
+.rec-count { font-size: 12px; color: var(--ink-faint); white-space: nowrap; }
+.seg.sm button { padding: 4px 9px; font-size: 12px; }
+.cmd.sm { padding: 4px 9px; min-height: 0; }
+
+.rec-table { display: flex; flex-direction: column; gap: 6px; }
+
+.rec-head {
+  padding: 0 13px 6px; position: sticky; top: -24px; z-index: 1;
+  background: linear-gradient(var(--bg0), var(--bg0) 70%, transparent);
+}
+.rec-head .th {
+  font-family: var(--font-display); font-size: 11px; font-weight: 700; letter-spacing: 0.3px;
+  text-transform: uppercase; color: var(--ink-faint);
+  background: none; border: none; padding: 0; text-align: left; display: flex; align-items: center; gap: 4px;
+}
+.rec-head .th[data-align="right"] { justify-content: flex-end; text-align: right; }
+.rec-head .th.sortable { cursor: pointer; }
+.rec-head .th.sortable:hover { color: var(--ink); }
+.rec-head .th[aria-pressed="true"] { color: var(--gold); }
+.rec-head .th .arrow { font-size: 10px; opacity: 0.8; }
+
+.day-head {
+  grid-column: 1 / -1;
+  display: flex; align-items: center; gap: 8px;
+  margin: 8px 2px 2px;
+  font-family: var(--font-display); font-size: 11px; font-weight: 700; letter-spacing: 0.3px;
+  color: var(--gold); text-transform: uppercase;
+}
+.day-head::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--gold-deep), transparent); }
+.day-head .ct { color: var(--ink-faint); font-weight: 400; }
+
+.rec { padding: 8px 13px; cursor: pointer; }
+.rec:hover { border-color: var(--gold); }
+.rec .sig { font-size: 17px; color: var(--gold); text-align: center; }
+.rec .who { min-width: 0; overflow: hidden; }
+/* display:block is required for text-overflow:ellipsis to clip (inline spans don't) */
+.rec .who .nm { display: block; font-size: 14px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rec .who .sub { display: block; font-size: 11px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rec .col { display: flex; flex-direction: column; font-variant-numeric: tabular-nums; font-size: 13px; }
+.rec .col[data-align="right"] { text-align: right; }
+.rec .col .k { font-size: 10px; color: var(--ink-faint); }
+.rec .col.started > span:first-child { font-size: 12px; }
+.rec .col.gil { color: var(--gold); }
+.rec .fate { font-family: var(--font-display); font-size: 9px; font-weight: 700; padding: 3px 6px; border-radius: 4px; border: 1.5px solid currentColor; text-transform: uppercase; white-space: nowrap; text-align: center; justify-self: start; }
+.rec .fate[data-f="running"] { color: var(--battle); }
+.rec .fate[data-f="closed"] { color: var(--resting); }
+.rec .fate[data-f="orphaned"] { color: var(--awaiting); }
+.rec-act { display: flex; justify-content: flex-end; }
+.icon-btn.sm { width: 26px; height: 24px; font-size: 13px; opacity: 0; }
+.rec:hover .icon-btn.sm { opacity: 1; }
+
+.pager { display: flex; align-items: center; gap: 12px; justify-content: center; padding: 14px; color: var(--ink-dim); font-size: 13px; }
+
+/* mobile: collapse the table into stacked cards (flex-wrap, label+value chips) */
+@media (max-width: 760px) {
+  .rec-head { display: none; }
+  .rec { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+  .rec .sig { font-size: 15px; }
+  .rec .who { flex: 1 1 55%; min-width: 0; }
+  .rec .fate { margin-left: auto; }
+  .rec .col { flex-direction: row; gap: 5px; font-size: 12px; }
+  .rec .col[data-align="right"] { text-align: left; }
+  .rec .col .k { order: -1; }
+  .rec-act { display: none; }
+}
+
+/* ======================================================================
+   CHARACTER SHEET (drill-down modal)
+   ====================================================================== */
+.overlay {
+  position: fixed; inset: 0; z-index: 40;
+  background: var(--overlay);
+  display: grid; place-items: center; padding: 24px;
+  animation: fade 0.15s ease;
+}
+@keyframes fade { from { opacity: 0; } }
+.sheet {
+  width: min(680px, 100%); max-height: 90vh; overflow-y: auto;
+  padding: 20px 22px; display: flex; flex-direction: column; gap: 16px;
+}
+.sheet-head { display: grid; grid-template-columns: auto 1fr auto; gap: 14px; align-items: center; }
+.sheet-head .portrait { width: 56px; height: 56px; font-size: 28px; }
+.sheet-name { font-family: var(--font-display); font-size: 20px; font-weight: 700; color: var(--gold); }
+.sheet-sub { font-size: 14px; color: var(--ink-dim); margin-top: 4px; }
+.sheet section > h4 { font-family: var(--font-display); font-size: 12px; font-weight: 700; color: var(--gold); letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 8px; }
+.sheet .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; }
+.kv { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; border-bottom: 1px dashed color-mix(in srgb, var(--win-edge) 22%, transparent); padding: 3px 0; }
+.kv .k { color: var(--ink-dim); }
+.kv .v { color: var(--ink); }
+.questlog { display: flex; flex-direction: column; gap: 6px; }
+.ql { display: grid; grid-template-columns: 18px 1fr; gap: 8px; font-size: 13px; align-items: start; }
+.ql .mark { font-size: 12px; }
+.ql[data-s="completed"] { color: var(--ink-faint); }
+.ql[data-s="completed"] .mark { color: var(--battle); }
+.ql[data-s="in_progress"] .mark { color: var(--awaiting); }
+.ql[data-s="pending"] .mark { color: var(--ink-faint); }
+.timeline { display: flex; flex-direction: column; gap: 4px; font-size: 12px; max-height: 180px; overflow-y: auto; }
+.ev { display: grid; grid-template-columns: auto 1fr; gap: 8px; color: var(--ink-dim); }
+.ev .when { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.ev .what b { color: var(--ink); font-weight: 400; }
+.close-x { position: absolute; top: 12px; right: 14px; }
+
+/* ======================================================================
+   STATES: empty / loading
+   ====================================================================== */
+.empty {
+  grid-column: 1 / -1;
+  text-align: center; padding: 60px 20px; color: var(--ink-faint);
+  display: flex; flex-direction: column; gap: 12px; align-items: center;
+}
+.empty .big { font-family: var(--font-display); font-size: 15px; font-weight: 700; color: var(--ink-dim); }
+.empty .crest { font-size: 40px; opacity: 0.5; }
+
+/* ======================================================================
+   SETTINGS slide-over
+   ====================================================================== */
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 50;
+  width: min(400px, 100%); padding: 16px 18px 28px;
+  overflow-y: auto;
+  border-radius: 0;
+  animation: slidein 0.18s ease;
+  display: flex; flex-direction: column; gap: 11px;
+}
+@keyframes slidein { from { transform: translateX(100%); } }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; }
+.drawer h3 { font-family: var(--font-display); font-size: 16px; font-weight: 700; color: var(--gold); }
+/* section divider header */
+.set-sec {
+  font-family: var(--font-display); font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+  text-transform: uppercase; color: var(--gold-deep);
+  margin-top: 8px; padding-bottom: 5px; border-bottom: 1.5px solid color-mix(in srgb, var(--win-edge) 35%, transparent);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.set-sec small { font-family: var(--font-body); font-size: 11px; font-weight: 400; color: var(--ink-faint); text-transform: none; letter-spacing: 0; }
+.field { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+.field > label { color: var(--ink-dim); font-size: 12px; }
+.field > .seg { flex: 0 1 auto; }
+.seg { display: flex; gap: 4px; }
+.seg button { background: var(--sunken); border: 1.5px solid var(--win-edge); border-radius: 5px; color: var(--ink-dim); padding: 5px 9px; font-size: 12px; }
+.seg button[aria-pressed="true"] { color: var(--gold); border-color: var(--gold); }
+.drawer input[type="number"], .drawer input[type="text"] { background: var(--sunken); border: 1.5px solid var(--win-edge); border-radius: 5px; color: var(--ink); padding: 6px 9px; outline: none; min-width: 0; }
+.drawer input:focus { border-color: var(--gold); }
+.numfield { display: inline-flex; align-items: center; gap: 6px; }
+.numfield input { width: 72px; text-align: right; }
+.numfield .suf { color: var(--ink-faint); font-size: 11px; }
+.row-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--ink-dim); }
+.row-toggle .cmd { min-width: 44px; text-align: center; }
+.rules { display: flex; flex-direction: column; gap: 6px; }
+.rule { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 6px; align-items: center; }
+.rule input { font-size: 12px; }
+.rule .arr { color: var(--ink-faint); }
+.rule .cmd { padding: 4px 8px; }
+.rules > .cmd { align-self: flex-start; padding: 5px 10px; }
+
+/* ======================================================================
+   LORDS — spawn-template roster + deploy/editor forms
+   ====================================================================== */
+.lords { display: flex; flex-direction: column; gap: 12px; }
+.lords > .realm-head { margin-top: 0; }
+.lords .realm-head .cmd { font-family: var(--font-display); font-weight: 700; letter-spacing: 0.5px; }
+
+.lords-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+}
+.lords-empty { grid-column: 1 / -1; color: var(--ink-faint); font-size: 13px; padding: 8px 2px; }
+
+/* a lord card reuses .char chrome but is a compact standard/banner */
+.char.lord { padding: 12px 13px; gap: 8px; }
+.char.lord:hover { transform: none; } /* it's a roster entry, not a selectable hero */
+
+.lord-stats { display: flex; flex-wrap: wrap; gap: 10px 14px; font-size: 12px; color: var(--ink-dim); }
+.lord-stats .lstat { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.lord-stats .gil { color: var(--gold); }
+
+.lord-deploy { display: flex; flex-direction: column; gap: 8px; margin-top: 2px; }
+.lord-deploy .field { font-size: 12px; }
+.hint { color: var(--ink-faint); font-weight: 400; font-size: 11px; }
+
+/* shared input styling for the new control types in cards + drawers */
+.lord-deploy input[type="text"],
+.lord-deploy textarea,
+.lord-deploy select,
+.drawer input[type="password"],
+.drawer textarea,
+.drawer select {
+  background: rgba(0, 0, 0, 0.4); border: 1.5px solid var(--win-edge);
+  border-radius: 5px; color: var(--ink); padding: 6px 9px; font-size: 13px;
+  font-family: var(--font-body); outline: none; width: 100%;
+}
+.lord-deploy input:focus, .lord-deploy textarea:focus, .lord-deploy select:focus,
+.drawer input:focus, .drawer textarea:focus, .drawer select:focus { border-color: var(--gold); }
+.lord-deploy textarea, .drawer textarea { resize: vertical; min-height: 54px; }
+
+.lord-err {
+  font-size: 12px; color: var(--ko);
+  background: rgba(255, 91, 110, 0.1); border: 1px solid rgba(255, 91, 110, 0.4);
+  border-radius: 5px; padding: 7px 9px;
+}
+
+.lord-flash {
+  font-size: 12px; color: var(--battle);
+  background: rgba(91, 224, 138, 0.1); border: 1px solid rgba(91, 224, 138, 0.4);
+  border-radius: 5px; padding: 6px 9px; animation: fade 0.15s ease;
+}
+
+/* ======================================================================
+   RESPONSIVE / MOBILE
+   ====================================================================== */
+@media (max-width: 760px) {
+  .dash { grid-template-columns: 1fr; }
+  .statgrid { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 640px) {
+  /* one natural page scroll instead of a viewport-locked inner scroll — the
+     dashboard otherwise eats the whole screen and buries the party cards */
+  html, body { height: auto; overflow: auto; }
+  body { font-size: 14px; }
+  .app { height: auto; min-height: 100%; padding: 10px 11px 16px; gap: 11px; }
+  .app > .scroll, .scroll { overflow: visible; flex: none; }
+
+  /* topbar: brand + gear on top row, nav full-width scrollable below */
+  .topbar { gap: 10px; }
+  .nav {
+    order: 3; width: 100%;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav button { flex: 1; min-width: max-content; padding: 9px 12px; font-size: 11px; }
+  .spacer { display: none; }
+
+  /* search + facets: comfortable, facets scroll horizontally instead of stacking tall */
+  .search { padding: 11px 13px; }
+  .search input { font-size: 16px; } /* >=16px stops iOS zoom-on-focus */
+  .facets {
+    flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px; scrollbar-width: none;
+  }
+  .facets::-webkit-scrollbar { display: none; }
+  .facetgroup { flex-wrap: nowrap; }
+  .chip { padding: 6px 11px; font-size: 13px; }
+
+  .statgrid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+
+  .party, .party.compact { grid-template-columns: 1fr; }
+  .lords-grid { grid-template-columns: 1fr; }
+
+  /* tap-friendly card actions */
+  .char { padding: 13px; }
+  /* full-width cards have room: cap the balloon so it never overruns the card */
+  .char .speech { max-width: 60%; font-size: 11px; }
+  .char-actions input { padding: 9px 11px; font-size: 16px; }
+  .cmd { padding: 0 13px; min-height: 38px; }
+  .icon-btn { width: 38px; height: 36px; }
+
+  /* records: stack the metrics, drop the cwd subtitle clutter */
+  .rec { grid-template-columns: 30px 1fr auto; gap: 10px; row-gap: 6px; padding: 11px; }
+  .rec .fate { grid-column: 3; grid-row: 1; }
+  .rec .num { grid-column: 2 / 4; grid-row: 2; text-align: left; display: inline-flex; gap: 6px; align-items: baseline; }
+  .rec .num .k { display: inline; }
+  .rec .num.gil { justify-self: end; }
+
+  /* quest board single column */
+  .kanban { grid-template-columns: 1fr; }
+
+  /* sheet/drawer go (near) full screen */
+  .overlay { padding: 0; }
+  .sheet { width: 100%; max-height: 100vh; height: 100%; border-radius: 0; }
+  .sheet .grid2 { grid-template-columns: 1fr; }
+  .drawer { width: 100%; }
+}

@@ -1,0 +1,17 @@
+# Linux systemd unit. Edit paths/env, then:
+#   sudo cp deploy/mc-reporter.service /etc/systemd/system/
+#   sudo systemctl enable --now mc-reporter
+[Unit]
+Description=Agents Mission Control reporter
+After=network-online.target
+
+[Service]
+ExecStart=/path/to/dist/mc-reporter
+Environment=MC_SERVER_URL=wss://hub.your-tailnet.ts.net:7777/ws/report
+Environment=MC_TOKEN=CHANGE-ME
+Environment=MC_HOST_LABEL=dev-box-1
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

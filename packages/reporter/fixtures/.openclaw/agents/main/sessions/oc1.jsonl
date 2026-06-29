@@ -1,0 +1,3 @@
+{"type":"session","cwd":"/work","timestamp":"2026-04-18T23:48:00Z"}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"deploy the service"}]}}
+{"type":"message","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":300,"cache_read_input_tokens":1000,"output_tokens":40},"content":[{"type":"text","text":"Deploying now."},{"type":"tool_use","name":"Bash"}]}}

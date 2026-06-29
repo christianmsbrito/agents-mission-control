@@ -1,0 +1,3 @@
+{"type":"summary","summary":"Building the mission control dashboard"}
+{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1200,"cache_read_input_tokens":300,"output_tokens":450},"content":[{"type":"text","text":"Let me read the file"},{"type":"tool_use","name":"Read"}]}}
+{"type":"assistant","message":{"model":"claude-opus-4-8","usage":{"input_tokens":800,"output_tokens":200},"content":[{"type":"tool_use","name":"Edit"},{"type":"tool_use","name":"Read"}]}}
