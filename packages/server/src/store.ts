@@ -309,6 +309,10 @@ export class Store {
        )
        ON CONFLICT(session_key) DO UPDATE SET
          state = 'running',
+         -- A running session has no end: clear any ended_at left over from a prior
+         -- closure so a resumed session's lifespan (and the activity-gauge
+         -- denominator) is measured against the live span, not the first run.
+         ended_at = NULL,
          last_seen_at = excluded.last_seen_at,
          live_id = excluded.live_id,
          handle = excluded.handle,

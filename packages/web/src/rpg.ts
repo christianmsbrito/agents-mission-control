@@ -152,8 +152,11 @@ export function activeFraction(s: {
   lastSeenAt?: number;
 }): number | undefined {
   if (s.activeMs == null) return undefined;
-  const end = s.endedAt ?? s.lastSeenAt;
-  if (end == null) return undefined;
+  // Denominator is the observed lifespan. Use the LATER of endedAt/lastSeenAt so a
+  // stale endedAt (a resumed session whose first-run close lingered) can't shrink
+  // the span below what was actually observed and clamp the gauge to a false 100%.
+  const end = Math.max(s.endedAt ?? 0, s.lastSeenAt ?? 0);
+  if (end === 0) return undefined;
   const lifespan = end - s.startedAt;
   if (lifespan <= 0) return undefined;
   return Math.min(1, Math.max(0, s.activeMs / lifespan));

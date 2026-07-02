@@ -96,6 +96,23 @@ describe("Store.record events", () => {
     store.close();
   });
 
+  test("resuming a closed session clears its stale ended_at", () => {
+    const store = new Store(":memory:");
+    // Same durable session_key, resumed under a new pid (claude --resume).
+    const run1 = { id: "h:5", provider: "claude", pid: 5, hostId: "h", hostLabel: "H",
+      cwd: "/r", category: "code", startedAt: 1, cpu: 0, memMb: 0, providerSessionId: "P9" };
+    const run2 = { ...run1, id: "h:9", pid: 9 };
+    store.record({ hostId: "h", hostLabel: "H", sentAt: 1, sessions: [run1] } as any, 1);
+    store.record({ hostId: "h", hostLabel: "H", sentAt: 2, sessions: [] } as any, 2); // closes -> ended_at=2
+    store.record({ hostId: "h", hostLabel: "H", sentAt: 3, sessions: [run2] } as any, 3); // resumed
+    const row: any = store.db.query("SELECT state, ended_at FROM sessions WHERE session_key='P9'").get();
+    expect(row.state).toBe("running");
+    // A running session has no end: the stale ended_at from the first closure must be gone,
+    // else lifespan (and the activity gauge denominator) is computed against the wrong span.
+    expect(row.ended_at).toBeNull();
+    store.close();
+  });
+
   test("active false->true flip emits session.state with {from,to}", () => {
     const store = new Store(":memory:");
     store.record({ hostId: "h", hostLabel: "H", sentAt: 1,

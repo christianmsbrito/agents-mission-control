@@ -1,5 +1,30 @@
 import { expect, test, describe } from "bun:test";
-import { classifyCrash, battleStateOf } from "./rpg.ts";
+import { classifyCrash, battleStateOf, activeFraction } from "./rpg.ts";
+
+describe("activeFraction", () => {
+  test("uses endedAt for a normally-closed session", () => {
+    // active 30m of a 60m lifespan.
+    expect(activeFraction({ activeMs: 1_800_000, startedAt: 0, endedAt: 3_600_000, lastSeenAt: 3_600_000 }))
+      .toBeCloseTo(0.5, 5);
+  });
+
+  test("a stale ended_at (< lastSeenAt) cannot shrink the denominator to inflate active%", () => {
+    // Resumed-session corruption: ended_at is the first run's close (49m) but the
+    // session actually lived ~35h (lastSeenAt) and accrued ~5.25h active. The gauge
+    // must reflect the observed span, not clamp to 100% off the stale 49m.
+    const f = activeFraction({
+      activeMs: 18_900_000,          // 315m active
+      startedAt: 0,
+      endedAt: 2_957_800,            // stale 49.3m
+      lastSeenAt: 127_140_722,       // true 2119m span
+    });
+    expect(f).toBeCloseTo(18_900_000 / 127_140_722, 4); // ~0.149, NOT 1.0
+  });
+
+  test("undefined when activeMs absent", () => {
+    expect(activeFraction({ startedAt: 0, lastSeenAt: 100 })).toBeUndefined();
+  });
+});
 
 describe("classifyCrash", () => {
   test("maps real crash texts to suggested-action keys", () => {
