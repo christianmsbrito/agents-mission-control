@@ -99,6 +99,46 @@ describe("claudeToImport", () => {
     expect(session.peakContextTokens).toBe(1600); // the earlier, higher turn
   });
 
+  test("folds subagent transcript tokens into the session rollup", () => {
+    // A subagent-driven session: the main transcript is thin, the delegated work
+    // (and most of the cost) lives in separate agent-*.jsonl transcripts.
+    const sub1 = JSON.stringify({
+      type: "assistant",
+      timestamp: T2,
+      isSidechain: true,
+      message: {
+        id: "s1",
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 400, cache_read_input_tokens: 100, cache_creation_input_tokens: 50, output_tokens: 200 },
+        content: [{ type: "text", text: "subagent work" }],
+      },
+    });
+    const sub2 = JSON.stringify({
+      type: "assistant",
+      timestamp: T3,
+      isSidechain: true,
+      message: {
+        id: "s2",
+        model: "claude-opus-4-8",
+        usage: { input_tokens: 600, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 100 },
+        content: [{ type: "text", text: "more subagent work" }],
+      },
+    });
+
+    const base = claudeToImport(TRANSCRIPT, META).session;
+    const { session } = claudeToImport(TRANSCRIPT, META, [sub1, sub2]);
+
+    // main 1500 in + (400 + 600) subagent = 2500
+    expect(session.tokensIn).toBe(base.tokensIn! + 1000);
+    expect(session.tokensIn).toBe(2500);
+    // main 450 out + (200 + 100) = 750
+    expect(session.tokensOut).toBe(base.tokensOut! + 300);
+    expect(session.tokensCacheRead).toBe(base.tokensCacheRead! + 100);
+    expect(session.tokensCacheWrite).toBe(base.tokensCacheWrite! + 50);
+    // peak occupancy is still the MAIN session's live window, not a subagent sum.
+    expect(session.peakContextTokens).toBe(base.peakContextTokens);
+  });
+
   test("emits hour-bucketed cumulative samples", () => {
     const { samples } = claudeToImport(TRANSCRIPT, META);
     expect(samples.length).toBeGreaterThanOrEqual(1);

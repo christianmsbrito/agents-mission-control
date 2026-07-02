@@ -1,4 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProviderPlugin, Enrichment, EnrichContext } from "./types.ts";
 import type { ProcInfo } from "../procscan.ts";
@@ -203,6 +204,111 @@ export function parseClaudeTranscript(text: string): Enrichment {
   return out;
 }
 
+/** The four billable token counters a subagent transcript contributes. */
+export type SubagentUsage = {
+  tokensIn: number;
+  tokensOut: number;
+  tokensCacheRead: number;
+  tokensCacheWrite: number;
+};
+
+/** One subagent transcript to fold in: a stable cache `key` (path:mtime:size) and
+ * a lazy `read()` that's only invoked on a cache miss. */
+export type SubagentEntry = { key: string; read: () => string };
+
+/**
+ * Sum the token usage across a session's subagent transcripts.
+ *
+ * Newer Claude Code writes each Task/Agent subagent to its OWN transcript under
+ * `<projectDir>/<sessionId>/subagents/agent-*.jsonl` — those tokens are absent
+ * from the main `<sessionId>.jsonl` the parser reads, so a subagent-driven session
+ * (thin orchestrator, heavy delegates) massively under-reports its cost.
+ *
+ * `cache` is keyed by an append-stable `path:mtime:size` string and MUST be scoped
+ * to a single session (the reporter keeps one per sessionId): a file that grew
+ * gets a fresh key and is re-parsed, its old key evicted here so the map can't
+ * grow without bound across ticks. Unchanged files are served from cache without
+ * re-reading — the reporter ticks every few seconds over potentially dozens of
+ * these files.
+ */
+export function sumSubagentUsage(
+  entries: SubagentEntry[],
+  cache: Map<string, SubagentUsage>,
+): SubagentUsage {
+  const total: SubagentUsage = { tokensIn: 0, tokensOut: 0, tokensCacheRead: 0, tokensCacheWrite: 0 };
+  const live = new Set<string>();
+  for (const e of entries) {
+    live.add(e.key);
+    let u = cache.get(e.key);
+    if (!u) {
+      const p = parseClaudeTranscript(e.read());
+      u = {
+        tokensIn: p.tokensIn ?? 0,
+        tokensOut: p.tokensOut ?? 0,
+        tokensCacheRead: p.tokensCacheRead ?? 0,
+        tokensCacheWrite: p.tokensCacheWrite ?? 0,
+      };
+      cache.set(e.key, u);
+    }
+    total.tokensIn += u.tokensIn;
+    total.tokensOut += u.tokensOut;
+    total.tokensCacheRead += u.tokensCacheRead;
+    total.tokensCacheWrite += u.tokensCacheWrite;
+  }
+  for (const k of cache.keys()) if (!live.has(k)) cache.delete(k);
+  return total;
+}
+
+/**
+ * Fold subagent token usage into a base enrichment's four counters. Deliberately
+ * touches ONLY the token counters: `contextTokens` is the main session's live-window
+ * occupancy (a snapshot, not a sum) and `model`/`summary`/`toolsUsed`/errors stay the
+ * main session's.
+ */
+export function addSubagentUsage(base: Enrichment, u: SubagentUsage): void {
+  base.tokensIn = (base.tokensIn ?? 0) + u.tokensIn;
+  base.tokensOut = (base.tokensOut ?? 0) + u.tokensOut;
+  base.tokensCacheRead = (base.tokensCacheRead ?? 0) + u.tokensCacheRead;
+  base.tokensCacheWrite = (base.tokensCacheWrite ?? 0) + u.tokensCacheWrite;
+}
+
+/** Per-session subagent token cache, keyed by sessionId. Kept module-level so it
+ * survives across reporter ticks; one inner map per session ever enriched. */
+const subagentCaches = new Map<string, Map<string, SubagentUsage>>();
+function subagentCacheFor(sessionId: string): Map<string, SubagentUsage> {
+  let c = subagentCaches.get(sessionId);
+  if (!c) subagentCaches.set(sessionId, (c = new Map()));
+  return c;
+}
+
+/**
+ * Fold this session's subagent transcripts into `out` (mutates the token counters).
+ * Never throws: a missing subagents dir (older Claude, or none spawned) or an
+ * unreadable file degrades to the main-transcript totals — matching the enrich
+ * contract that one bad file can't kill the host report.
+ */
+async function foldSubagents(dir: string, sessionId: string, out: Enrichment): Promise<void> {
+  const subDir = join(dir, sessionId, "subagents");
+  let names: string[];
+  try {
+    names = await readdir(subDir);
+  } catch {
+    return; // no subagents dir
+  }
+  const entries: SubagentEntry[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".jsonl")) continue;
+    const p = join(subDir, name);
+    try {
+      const s = await stat(p);
+      entries.push({ key: `${p}:${s.mtimeMs}:${s.size}`, read: () => readFileSync(p, "utf8") });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  if (entries.length) addSubagentUsage(out, sumSubagentUsage(entries, subagentCacheFor(sessionId)));
+}
+
 /** Shape of the pid->sessionId map file, incl. the freshness timestamps it carries. */
 export type SessionMeta = {
   sessionId?: string;
@@ -293,6 +399,10 @@ export const claudePlugin: ProviderPlugin = {
     } catch {
       /* ignore */
     }
+    // Fold in subagent transcripts (their tokens live in a sibling dir, absent from
+    // the main file) so subagent-driven sessions report their true cost. sessionId
+    // scopes both the dir and the cache; the legacy birthtime-matched path has no id.
+    if (meta?.sessionId) await foldSubagents(dir, meta.sessionId, out);
     Object.assign(out, statusOnly(meta, now, ttl));
     // Active guard: the pid->sessionId live status is authoritative/real-time, so a
     // session that is actively processing right now can never be "crashed" — clear a

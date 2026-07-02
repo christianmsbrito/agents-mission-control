@@ -1,9 +1,13 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import os from "node:os";
 import type { PersistedSession, SessionSample, PersistedEvent } from "@mc/shared";
-import { parseClaudeTranscript } from "../../../../reporter/src/providers/claude.ts";
+import {
+  parseClaudeTranscript,
+  addSubagentUsage,
+  type SubagentUsage,
+} from "../../../../reporter/src/providers/claude.ts";
 import type { BackfillAdapter, BackfillOpts, RawSession } from "../types.ts";
 import { buildClosedSession, trimTail, type Point } from "./_common.ts";
 
@@ -45,9 +49,25 @@ function dedupedEntries(text: string): any[] {
 export function claudeToImport(
   text: string,
   meta: { sessionId: string; cwd: string | null; mtime: number },
+  subagentTexts: string[] = [],
 ): { session: PersistedSession; samples: SessionSample[]; events: PersistedEvent[] } {
   const enr = parseClaudeTranscript(text);
   const entries = dedupedEntries(text);
+
+  // Fold subagent transcript tokens into the rollup (see reporter's foldSubagents):
+  // a subagent-driven session logs most of its cost to sibling agent-*.jsonl files.
+  // The per-hour sample timeline stays main-only (the closed-session cost rollup is
+  // what matters for history; interleaving subagent turns by time isn't worth it).
+  for (const sub of subagentTexts) {
+    const s = parseClaudeTranscript(sub);
+    const u: SubagentUsage = {
+      tokensIn: s.tokensIn ?? 0,
+      tokensOut: s.tokensOut ?? 0,
+      tokensCacheRead: s.tokensCacheRead ?? 0,
+      tokensCacheWrite: s.tokensCacheWrite ?? 0,
+    };
+    addSubagentUsage(enr, u);
+  }
 
   let firstTs: number | null = null;
   let lastTs: number | null = null;
@@ -137,6 +157,29 @@ function cwdFromTranscript(path: string): string | null {
   return null;
 }
 
+/** Read this session's subagent transcripts from `<projectDir>/<sessionId>/subagents/`.
+ * Best-effort: a missing dir (older Claude / none spawned) or an unreadable file
+ * yields fewer texts, never throws. */
+function readSubagentTexts(projectDir: string, sessionId: string): string[] {
+  const subDir = join(projectDir, sessionId, "subagents");
+  let names: string[];
+  try {
+    names = readdirSync(subDir);
+  } catch {
+    return [];
+  }
+  const texts: string[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".jsonl")) continue;
+    try {
+      texts.push(readFileSync(join(subDir, name), "utf8"));
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  return texts;
+}
+
 export const claudeBackfillAdapter: BackfillAdapter = {
   id: "claude",
   available(opts?: { home?: string }): boolean {
@@ -184,7 +227,11 @@ export const claudeBackfillAdapter: BackfillAdapter = {
   toImport(raw: RawSession) {
     const r = raw as ClaudeRaw;
     const text = readFileSync(r.path, "utf8");
-    return claudeToImport(text, { sessionId: r.sessionId, cwd: r.cwd, mtime: r.mtime });
+    return claudeToImport(
+      text,
+      { sessionId: r.sessionId, cwd: r.cwd, mtime: r.mtime },
+      readSubagentTexts(dirname(r.path), r.sessionId),
+    );
   },
   enrichInput(raw: RawSession): string {
     const r = raw as ClaudeRaw;
