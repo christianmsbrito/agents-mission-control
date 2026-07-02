@@ -682,6 +682,14 @@ input, textarea { font-family: inherit; }
 .subrow-head .c.tools { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-faint); }
 .subrow-detail { display: flex; flex-direction: column; gap: 1px; padding: 2px 7px 4px 22px; font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 
+/* subagent lifecycle status pip: running (pulsing green), stalled (amber),
+   crashed (red), finished (dim). Small dot; the row title carries the label. */
+.sub-st { flex: none; width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; background: var(--ink-faint); }
+.sub-st[data-st="running"] { background: var(--battle); box-shadow: 0 0 5px var(--battle); animation: blink 1.4s steps(2) infinite; }
+.sub-st[data-st="stalled"] { background: var(--gold); box-shadow: 0 0 5px var(--gold-deep); }
+.sub-st[data-st="crashed"] { background: var(--ko); box-shadow: 0 0 5px var(--ko); }
+.sub-st[data-st="finished"] { background: color-mix(in srgb, var(--ink-faint) 70%, transparent); }
+
 /* ------- active-fraction bar (sheet) ------- */
 .actbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .actbar .track {

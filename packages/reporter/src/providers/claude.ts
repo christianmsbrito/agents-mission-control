@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ProviderPlugin, Enrichment, EnrichContext } from "./types.ts";
 import type { ProcInfo } from "../procscan.ts";
 import { extractClis, commandFromInput } from "../clis.ts";
-import { estimateCost, type SubSession } from "@mc/shared";
+import { estimateCost, type SubSession, type SubSessionStatus } from "@mc/shared";
 
 /** Tiny stable string hash (djb2) -> base36. For WorkItem.itemKey (no crypto needed). */
 function hashKey(s: string): string {
@@ -314,7 +314,11 @@ function scanSubagentMeta(text: string): { agentId?: string; firstAt?: number; l
  * transcript). Reuses {@link parseClaudeTranscript} for the deduped token/tool
  * counters, then adds the subagent-scoped fields (cost, peak context, time bounds).
  */
-export function subSessionFromText(text: string, fallbackAgentId: string, kind?: string): SubSession {
+export function subSessionFromText(
+  text: string,
+  fallbackAgentId: string,
+  kind?: string,
+): { sub: SubSession; errored: boolean } {
   const p = parseClaudeTranscript(text);
   const { agentId, firstAt, lastAt } = scanSubagentMeta(text);
   const tokensIn = p.tokensIn ?? 0;
@@ -336,35 +340,101 @@ export function subSessionFromText(text: string, fallbackAgentId: string, kind?:
   if (cost !== undefined) s.costUsd = cost;
   if (firstAt !== undefined) s.firstAt = firstAt;
   if (lastAt !== undefined) s.lastAt = lastAt;
-  return s;
+  // `errored` is stable per file (a transcript property) — cached alongside the
+  // SubSession; the LIVE status is derived from it each tick in buildSubSessions.
+  return { sub: s, errored: p.errored === true };
+}
+
+/** Tool_use_ids that already have a `tool_result` in the PARENT transcript — i.e.
+ * subagents whose spawning Task call has returned. A subagent whose sidecar
+ * `toolUseId` is in this set has finished; one absent is still outstanding. Pure. */
+export function completedToolUseIds(parentText: string): Set<string> {
+  const done = new Set<string>();
+  for (const line of parentText.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(t);
+    } catch {
+      continue;
+    }
+    const content = (ev?.message ?? ev)?.content;
+    if (!Array.isArray(content)) continue;
+    for (const c of content) {
+      if (c?.type === "tool_result" && typeof c.tool_use_id === "string") done.add(c.tool_use_id);
+    }
+  }
+  return done;
+}
+
+/** Derive a subagent's lifecycle status from its (stable) error flag plus live
+ * context. Precedence: a crashed turn wins; a returned Task is finished; an
+ * outstanding one is running (parent active + fresh transcript) or stalled (parent
+ * active but quiet), and finished once the parent itself is idle (nothing can be
+ * running in-process). Pure. */
+export function subSessionStatus(i: {
+  errored?: boolean;
+  completed: boolean;
+  parentActive: boolean;
+  fresh: boolean;
+}): SubSessionStatus {
+  if (i.errored) return "crashed";
+  if (i.completed) return "finished";
+  if (!i.parentActive) return "finished";
+  return i.fresh ? "running" : "stalled";
 }
 
 /** One subagent transcript to break down: an append-stable cache `key`
- * (path:mtime:size), the `agentId` fallback (filename hash), the `kind`
- * (from the sidecar, when known), and a lazy `read()` invoked on a cache miss. */
-export type SubagentFile = { key: string; agentId: string; kind?: string; read: () => string };
+ * (path:mtime:size), the `agentId` fallback (filename hash), the `kind` and
+ * `toolUseId` (from the sidecar, when known), the file `mtimeMs` (for the
+ * freshness check), and a lazy `read()` invoked on a cache miss. */
+export type SubagentFile = {
+  key: string;
+  agentId: string;
+  kind?: string;
+  toolUseId?: string;
+  mtimeMs?: number;
+  read: () => string;
+};
+
+/** Live inputs for {@link subSessionStatus}, recomputed per tick (never cached). */
+export type SubagentStatusCtx = {
+  now: number;
+  freshMs: number;
+  parentActive: boolean;
+  completed: Set<string>;
+};
 
 /**
  * Compute one {@link SubSession} per subagent transcript, memoized per `key`.
  * Cache contract mirrors {@link sumSubagentUsage}: unchanged files (same
  * `path:mtime:size` key) are served without re-reading; keys absent this tick are
  * evicted so the map can't grow without bound. Cache MUST be scoped per parent
- * session.
+ * session. The cached parse (tokens/tools/cost/errored) is stable; the lifecycle
+ * `status` is time-varying, so it is recomputed from `ctx` every tick — including
+ * on a cache hit — and never frozen in the cache.
  */
 export function buildSubSessions(
   files: SubagentFile[],
-  cache: Map<string, SubSession>,
+  cache: Map<string, { sub: SubSession; errored: boolean }>,
+  ctx?: SubagentStatusCtx,
 ): SubSession[] {
   const live = new Set<string>();
   const out: SubSession[] = [];
   for (const f of files) {
     live.add(f.key);
-    let s = cache.get(f.key);
-    if (!s) {
-      s = subSessionFromText(f.read(), f.agentId, f.kind);
-      cache.set(f.key, s);
+    let ent = cache.get(f.key);
+    if (!ent) {
+      ent = subSessionFromText(f.read(), f.agentId, f.kind);
+      cache.set(f.key, ent);
     }
-    out.push(s);
+    if (ctx) {
+      const completed = f.toolUseId ? ctx.completed.has(f.toolUseId) : false;
+      const fresh = f.mtimeMs !== undefined && ctx.now - f.mtimeMs <= ctx.freshMs;
+      ent.sub.status = subSessionStatus({ errored: ent.errored, completed, parentActive: ctx.parentActive, fresh });
+    }
+    out.push(ent.sub);
   }
   for (const k of cache.keys()) if (!live.has(k)) cache.delete(k);
   return out;
@@ -386,34 +456,52 @@ function sumSubSessions(subs: SubSession[]): SubagentUsage {
  * module-level so it survives across reporter ticks; one inner map per session ever
  * enriched. The fold reuses these SubSessions for the total, so a single cache
  * memoizes both the breakdown and the token-sum. */
-const subSessionCaches = new Map<string, Map<string, SubSession>>();
-function subSessionCacheFor(sessionId: string): Map<string, SubSession> {
+const subSessionCaches = new Map<string, Map<string, { sub: SubSession; errored: boolean }>>();
+function subSessionCacheFor(sessionId: string): Map<string, { sub: SubSession; errored: boolean }> {
   let c = subSessionCaches.get(sessionId);
   if (!c) subSessionCaches.set(sessionId, (c = new Map()));
   return c;
 }
 
-/** Read the `agentType` (the subagent's `kind`) from a transcript's `.meta.json`
- * sidecar (`agent-<hash>.meta.json`). The type is NOT in the transcript itself —
- * only the sidecar carries it. Returns undefined when absent/unreadable. */
-function agentTypeFromSidecar(subDir: string, transcriptName: string): string | undefined {
+/** How long since a subagent transcript's last write still counts as "fresh"
+ * (running vs stalled). Env `MC_SUBAGENT_FRESH_MS`, default 45s — generous enough
+ * that a subagent mid-tool-call isn't misread as stalled. */
+const SUBAGENT_FRESH_MS = Number(process.env.MC_SUBAGENT_FRESH_MS || 45_000);
+
+/** Read the `.meta.json` sidecar (`agent-<hash>.meta.json`) for a transcript: the
+ * subagent's `kind` (`agentType`) and its `toolUseId` (the parent Task tool_use id,
+ * used to detect whether the Task has returned). Neither is in the transcript
+ * itself. Returns empty on absent/unreadable. */
+function readSubagentSidecar(subDir: string, transcriptName: string): { kind?: string; toolUseId?: string } {
   const metaPath = join(subDir, transcriptName.replace(/\.jsonl$/, ".meta.json"));
   try {
     const meta = JSON.parse(readFileSync(metaPath, "utf8"));
-    return typeof meta?.agentType === "string" ? meta.agentType : undefined;
+    const out: { kind?: string; toolUseId?: string } = {};
+    if (typeof meta?.agentType === "string") out.kind = meta.agentType;
+    if (typeof meta?.toolUseId === "string") out.toolUseId = meta.toolUseId;
+    return out;
   } catch {
-    return undefined;
+    return {};
   }
 }
 
 /**
  * Fold this session's subagent transcripts into `out`: sums their tokens into the
  * headline counters (so totals stay main + Σ subagents) AND emits a per-subagent
- * breakdown on `out.subSessions`. Never throws: a missing subagents dir (older
- * Claude, or none spawned) or an unreadable file degrades to the main-transcript
- * totals — matching the enrich contract that one bad file can't kill the host report.
+ * breakdown on `out.subSessions` with a live lifecycle `status`. Never throws: a
+ * missing subagents dir (older Claude, or none spawned) or an unreadable file
+ * degrades to the main-transcript totals — matching the enrich contract that one
+ * bad file can't kill the host report.
+ *
+ * `ctx` carries the live status inputs: the parent transcript text (to see which
+ * Task calls have returned), whether the parent is currently active, and `now`.
  */
-async function foldSubagents(dir: string, sessionId: string, out: Enrichment): Promise<void> {
+async function foldSubagents(
+  dir: string,
+  sessionId: string,
+  out: Enrichment,
+  ctx: { parentText: string; parentActive: boolean; now: number },
+): Promise<void> {
   const subDir = join(dir, sessionId, "subagents");
   let names: string[];
   try {
@@ -427,10 +515,13 @@ async function foldSubagents(dir: string, sessionId: string, out: Enrichment): P
     const p = join(subDir, name);
     try {
       const s = await stat(p);
+      const sidecar = readSubagentSidecar(subDir, name);
       files.push({
         key: `${p}:${s.mtimeMs}:${s.size}`,
         agentId: agentIdFromName(name),
-        kind: agentTypeFromSidecar(subDir, name),
+        kind: sidecar.kind,
+        toolUseId: sidecar.toolUseId,
+        mtimeMs: s.mtimeMs,
         read: () => readFileSync(p, "utf8"),
       });
     } catch {
@@ -438,7 +529,12 @@ async function foldSubagents(dir: string, sessionId: string, out: Enrichment): P
     }
   }
   if (!files.length) return;
-  const subs = buildSubSessions(files, subSessionCacheFor(sessionId));
+  const subs = buildSubSessions(files, subSessionCacheFor(sessionId), {
+    now: ctx.now,
+    freshMs: SUBAGENT_FRESH_MS,
+    parentActive: ctx.parentActive,
+    completed: completedToolUseIds(ctx.parentText),
+  });
   // Keep the total-fold (headline = main + Σ subagents) sourced from the same
   // SubSessions, so the breakdown and the total can never disagree.
   addSubagentUsage(out, sumSubSessions(subs));
@@ -529,17 +625,27 @@ export const claudePlugin: ProviderPlugin = {
     }
     if (!file) return statusOnly(meta, now, ttl);
 
-    const out = parseClaudeTranscript(await Bun.file(file).text());
+    const mainText = await Bun.file(file).text();
+    const out = parseClaudeTranscript(mainText);
     try {
       out.lastActivityAt = (await stat(file)).mtimeMs;
     } catch {
       /* ignore */
     }
+    const status = statusOnly(meta, now, ttl);
     // Fold in subagent transcripts (their tokens live in a sibling dir, absent from
-    // the main file) so subagent-driven sessions report their true cost. sessionId
-    // scopes both the dir and the cache; the legacy birthtime-matched path has no id.
-    if (meta?.sessionId) await foldSubagents(dir, meta.sessionId, out);
-    Object.assign(out, statusOnly(meta, now, ttl));
+    // the main file) so subagent-driven sessions report their true cost, and emit a
+    // per-subagent breakdown with a live status. sessionId scopes both the dir and
+    // the cache; the legacy birthtime-matched path has no id. Status uses the parent
+    // transcript (which Task calls returned) + whether the parent is active now.
+    if (meta?.sessionId) {
+      await foldSubagents(dir, meta.sessionId, out, {
+        parentText: mainText,
+        parentActive: status.active === true,
+        now,
+      });
+    }
+    Object.assign(out, status);
     // Active guard: the pid->sessionId live status is authoritative/real-time, so a
     // session that is actively processing right now can never be "crashed" — clear a
     // stale transcript-derived error (and its crash detail) in lockstep.

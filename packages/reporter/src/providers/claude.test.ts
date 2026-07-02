@@ -4,6 +4,8 @@ import {
   sumSubagentUsage,
   addSubagentUsage,
   subSessionFromText,
+  completedToolUseIds,
+  subSessionStatus,
   agentIdFromName,
   buildSubSessions,
   type SubagentEntry,
@@ -131,13 +133,13 @@ test("subSessionFromText: prefers the transcript's agentId over the fallback", (
       content: [] },
     timestamp: "2026-06-24T20:46:32.008Z",
   });
-  const s = subSessionFromText(line, "fallbackId");
+  const { sub: s } = subSessionFromText(line, "fallbackId");
   expect(s.agentId).toBe("realId123");
 });
 
 test("subSessionFromText: falls back to the given agentId when the transcript has none", () => {
   const line = usageLine("m1", { tokensIn: 100, tokensOut: 50 });
-  const s = subSessionFromText(line, "fallbackId");
+  const { sub: s } = subSessionFromText(line, "fallbackId");
   expect(s.agentId).toBe("fallbackId");
 });
 
@@ -158,7 +160,7 @@ test("subSessionFromText: carries tokens, model, peakContext, tools, cost, and t
       timestamp: "2026-06-24T20:47:32.000Z",
     }),
   ].join("\n");
-  const s = subSessionFromText(lines, "id", "Explore");
+  const { sub: s } = subSessionFromText(lines, "id", "Explore");
   expect(s.agentId).toBe("id");
   expect(s.kind).toBe("Explore");
   expect(s.tokensIn).toBe(300);
@@ -175,7 +177,7 @@ test("subSessionFromText: carries tokens, model, peakContext, tools, cost, and t
 });
 
 test("subSessionFromText: omits kind when none is given", () => {
-  const s = subSessionFromText(usageLine("m1", { tokensIn: 1 }), "id");
+  const { sub: s } = subSessionFromText(usageLine("m1", { tokensIn: 1 }), "id");
   expect(s.kind).toBeUndefined();
 });
 
@@ -206,6 +208,60 @@ test("buildSubSessions: evicts cache keys no longer present this tick", () => {
   buildSubSessions([{ key: "agentA:2:20", agentId: "agentA", read: () => text }], cache);
   expect(cache.has("agentA:1:10")).toBe(false);
   expect(cache.has("agentA:2:20")).toBe(true);
+});
+
+test("completedToolUseIds: collects tool_use_ids that have a tool_result in the parent", () => {
+  const parent = [
+    JSON.stringify({ type: "assistant", message: { id: "m1", role: "assistant",
+      content: [{ type: "tool_use", name: "Task", id: "toolu_A", input: {} }] } }),
+    JSON.stringify({ type: "user", message: { role: "user",
+      content: [{ type: "tool_result", tool_use_id: "toolu_A", content: "done" }] } }),
+    // toolu_B was spawned but has no tool_result yet -> still outstanding.
+    JSON.stringify({ type: "assistant", message: { id: "m2", role: "assistant",
+      content: [{ type: "tool_use", name: "Task", id: "toolu_B", input: {} }] } }),
+  ].join("\n");
+  const done = completedToolUseIds(parent);
+  expect(done.has("toolu_A")).toBe(true);
+  expect(done.has("toolu_B")).toBe(false);
+});
+
+test("subSessionStatus: precedence crashed > finished > running/stalled", () => {
+  // crashed wins even if completed.
+  expect(subSessionStatus({ errored: true, completed: true, parentActive: true, fresh: true })).toBe("crashed");
+  // returned Task => finished.
+  expect(subSessionStatus({ completed: true, parentActive: true, fresh: false })).toBe("finished");
+  // outstanding + parent idle => finished (nothing can run in-process).
+  expect(subSessionStatus({ completed: false, parentActive: false, fresh: true })).toBe("finished");
+  // outstanding + parent active + fresh transcript => running.
+  expect(subSessionStatus({ completed: false, parentActive: true, fresh: true })).toBe("running");
+  // outstanding + parent active + quiet transcript => stalled.
+  expect(subSessionStatus({ completed: false, parentActive: true, fresh: false })).toBe("stalled");
+});
+
+test("buildSubSessions: assigns time-varying status from live ctx (recomputed, not cached)", () => {
+  const crashText = [
+    usageLine("ok", { tokensIn: 10 }),
+    JSON.stringify({ type: "assistant", isApiErrorMessage: true,
+      message: { role: "assistant", content: [{ type: "text", text: "API Error: 500" }] } }),
+  ].join("\n");
+  const okText = usageLine("ok", { tokensIn: 10, tokensOut: 5 });
+  const cache = new Map();
+  const files: SubagentFile[] = [
+    { key: "run:1:1", agentId: "run", toolUseId: "tu_run", mtimeMs: 1000, read: () => okText },
+    { key: "done:1:1", agentId: "done", toolUseId: "tu_done", mtimeMs: 1000, read: () => okText },
+    { key: "boom:1:1", agentId: "boom", toolUseId: "tu_boom", mtimeMs: 1000, read: () => crashText },
+  ];
+  const ctx = { now: 1500, freshMs: 1000, parentActive: true, completed: new Set(["tu_done"]) };
+  let subs = buildSubSessions(files, cache, ctx);
+  const byId = (id: string) => subs.find((s) => s.agentId === id)!;
+  expect(byId("run").status).toBe("running");   // outstanding, fresh (now-mtime=500<=1000), parent active
+  expect(byId("done").status).toBe("finished");  // has a tool_result
+  expect(byId("boom").status).toBe("crashed");   // last turn errored
+
+  // Same cached files, later tick: parent went idle -> running flips to finished
+  // (status is recomputed from live ctx, not frozen in the cache).
+  subs = buildSubSessions(files, cache, { now: 5000, freshMs: 1000, parentActive: false, completed: new Set(["tu_done"]) });
+  expect(subs.find((s) => s.agentId === "run")!.status).toBe("finished");
 });
 
 test("totals invariant: main token totals equal main-only + Σ subSessions", () => {

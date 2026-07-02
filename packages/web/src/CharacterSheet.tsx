@@ -114,7 +114,7 @@ export function CharacterSheet({ sessionKey, now, onClose }: { sessionKey: strin
                   </div>
                   {[...subagents].sort((a, b) => (b.costUsd ?? 0) - (a.costUsd ?? 0)).map((sub) => (
                     <div className="subtable-row" key={sub.agentId}>
-                      <span className="nm" title={sub.agentId}>{sub.kind || sub.agentId.slice(0, 8)}{sub.model ? <small style={{ color: "var(--ink-faint)" }}> · {sub.model.replace(/^claude-|-\d.*$/g, "")}</small> : null}</span>
+                      <span className="nm" title={sub.agentId}>{sub.status ? <span className="sub-st" data-st={sub.status} title={sub.status} /> : null}{sub.kind || sub.agentId.slice(0, 8)}{sub.model ? <small style={{ color: "var(--ink-faint)" }}> · {sub.model.replace(/^claude-|-\d.*$/g, "")}</small> : null}</span>
                       <span data-align="right" style={{ color: "var(--gold)" }}>{fmtCost(sub.costUsd)}</span>
                       <span data-align="right">{fmtTokens(subTokens(sub))}</span>
                       <span data-align="right">{fmtTokens(sub.peakContextTokens)}</span>

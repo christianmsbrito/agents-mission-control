@@ -83,6 +83,13 @@ export type SubSession = {
   agentId: string;
   /** Subagent type/label when known (e.g. "Explore", "code-reviewer"). */
   kind?: string;
+  /** Lifecycle status, best-effort. `running` = parent active & transcript fresh;
+   * `stalled` = parent active but the delegate went quiet with no result yet;
+   * `crashed` = last turn errored; `finished` = returned (parent has its result) or
+   * parent no longer active. "blocked"/"idle" don't apply — subagents run
+   * autonomously to completion and never wait on the user. Time-varying: derived
+   * fresh each report tick, not cached. */
+  status?: SubSessionStatus;
   tokensIn?: number;
   tokensOut?: number;
   tokensCacheRead?: number;
@@ -366,6 +373,9 @@ export type PersistedSession = {
    * row, not derived from (lossy) condensed samples. */
   activeMs?: number;
 };
+
+/** Best-effort lifecycle status of an in-process subagent. */
+export type SubSessionStatus = "running" | "finished" | "crashed" | "stalled";
 
 /** A persisted per-subagent usage row: {@link SubSession} keyed to its parent. */
 export type PersistedSubSession = SubSession & { sessionKey: string };

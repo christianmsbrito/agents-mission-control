@@ -388,17 +388,17 @@ export class Store {
     this.upsertSubSession = this.db.query(
       `INSERT INTO sub_sessions (
          session_key, agent_id, kind, tokens_in, tokens_out, tokens_cache_read,
-         tokens_cache_write, cost_usd, model, peak_context_tokens, tools_used, first_at, last_at
+         tokens_cache_write, cost_usd, model, peak_context_tokens, tools_used, first_at, last_at, status
        ) VALUES (
          $session_key, $agent_id, $kind, $tokens_in, $tokens_out, $tokens_cache_read,
-         $tokens_cache_write, $cost_usd, $model, $peak_context_tokens, $tools_used, $first_at, $last_at
+         $tokens_cache_write, $cost_usd, $model, $peak_context_tokens, $tools_used, $first_at, $last_at, $status
        )
        ON CONFLICT(session_key, agent_id) DO UPDATE SET
          kind = excluded.kind, tokens_in = excluded.tokens_in, tokens_out = excluded.tokens_out,
          tokens_cache_read = excluded.tokens_cache_read, tokens_cache_write = excluded.tokens_cache_write,
          cost_usd = excluded.cost_usd, model = excluded.model,
          peak_context_tokens = excluded.peak_context_tokens, tools_used = excluded.tools_used,
-         first_at = excluded.first_at, last_at = excluded.last_at`,
+         first_at = excluded.first_at, last_at = excluded.last_at, status = excluded.status`,
     );
     // Accrue one sampled interval onto a session's activeMs. Downsample-proof:
     // the accumulator lives on the row, not derived from (lossy) condensed samples.
@@ -449,6 +449,7 @@ export class Store {
         tokens_in INTEGER, tokens_out INTEGER, tokens_cache_read INTEGER,
         tokens_cache_write INTEGER, cost_usd REAL, model TEXT,
         peak_context_tokens INTEGER, tools_used TEXT, first_at INTEGER, last_at INTEGER,
+        status TEXT,
         PRIMARY KEY (session_key, agent_id)
       );
       CREATE INDEX IF NOT EXISTS ix_sub_sessions_key ON sub_sessions(session_key);
@@ -471,6 +472,7 @@ export class Store {
       try { this.db.exec(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch { /* already present */ }
     }
     try { this.db.exec("ALTER TABLE templates ADD COLUMN backend TEXT"); } catch { /* already present */ }
+    try { this.db.exec("ALTER TABLE sub_sessions ADD COLUMN status TEXT"); } catch { /* already present */ }
     // Index template_id AFTER the guarded ALTER above — on a pre-existing DB the
     // column doesn't exist until the ALTER runs, so indexing it inline in the
     // CREATE block above would fail with "no such column: template_id".
@@ -729,6 +731,7 @@ export class Store {
             $tools_used: ss.toolsUsed ? JSON.stringify(ss.toolsUsed) : null,
             $first_at: ss.firstAt ?? null,
             $last_at: ss.lastAt ?? null,
+            $status: ss.status ?? null,
           });
         }
 
@@ -1113,6 +1116,7 @@ export class Store {
       toolsUsed: r.tools_used ? JSON.parse(r.tools_used) : undefined,
       firstAt: r.first_at ?? undefined,
       lastAt: r.last_at ?? undefined,
+      status: r.status ?? undefined,
     };
   }
 

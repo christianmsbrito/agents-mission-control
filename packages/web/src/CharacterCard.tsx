@@ -29,6 +29,7 @@ function SubagentRow({ sub }: { sub: SubSession }) {
     <div className="subrow" data-open={open || undefined}>
       <button className="subrow-head" onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}>
         <span className="tw">{open ? "▾" : "▸"}</span>
+        {sub.status && <span className="sub-st" data-st={sub.status} title={sub.status} />}
         <span className="nm" title={sub.agentId}>{label}</span>
         <span className="c gil">{fmtCost(sub.costUsd)}</span>
         <span className="c tok">{fmtTokens(subTokens(sub))}</span>
