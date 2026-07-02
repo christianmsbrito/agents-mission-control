@@ -1,5 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ProviderPlugin, Enrichment, EnrichContext } from "./types.ts";
 import type { ProcInfo } from "../procscan.ts";
@@ -472,7 +472,7 @@ const SUBAGENT_FRESH_MS = Number(process.env.MC_SUBAGENT_FRESH_MS || 45_000);
  * subagent's `kind` (`agentType`) and its `toolUseId` (the parent Task tool_use id,
  * used to detect whether the Task has returned). Neither is in the transcript
  * itself. Returns empty on absent/unreadable. */
-function readSubagentSidecar(subDir: string, transcriptName: string): { kind?: string; toolUseId?: string } {
+export function readSubagentSidecar(subDir: string, transcriptName: string): { kind?: string; toolUseId?: string } {
   const metaPath = join(subDir, transcriptName.replace(/\.jsonl$/, ".meta.json"));
   try {
     const meta = JSON.parse(readFileSync(metaPath, "utf8"));
@@ -483,6 +483,39 @@ function readSubagentSidecar(subDir: string, transcriptName: string): { kind?: s
   } catch {
     return {};
   }
+}
+
+/** Synchronously enumerate a subagents dir into {@link SubagentFile}s (agentId +
+ * sidecar kind/toolUseId + mtime + lazy read). Used by the backfill path, which is
+ * sync and one-shot; the live reporter's {@link foldSubagents} uses the async fs API
+ * to stay off the event loop. Returns [] on a missing/unreadable dir (never throws). */
+export function subagentFilesInDir(subDir: string): SubagentFile[] {
+  let names: string[];
+  try {
+    names = readdirSync(subDir);
+  } catch {
+    return [];
+  }
+  const files: SubagentFile[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".jsonl")) continue;
+    const p = join(subDir, name);
+    try {
+      const s = statSync(p);
+      const sidecar = readSubagentSidecar(subDir, name);
+      files.push({
+        key: `${p}:${s.mtimeMs}:${s.size}`,
+        agentId: agentIdFromName(name),
+        kind: sidecar.kind,
+        toolUseId: sidecar.toolUseId,
+        mtimeMs: s.mtimeMs,
+        read: () => readFileSync(p, "utf8"),
+      });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  return files;
 }
 
 /**

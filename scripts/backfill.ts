@@ -87,6 +87,10 @@ export function printReport(report: BackfillReport): string {
     }
     lines.push(line);
   }
+  if (report.subSessions) {
+    const ss = report.subSessions;
+    lines.push(`subagents: ${ss.sessions} sessions, ${ss.rows} rows`);
+  }
   if (report.enrich) {
     const e = report.enrich;
     if (e.skippedPhase) {

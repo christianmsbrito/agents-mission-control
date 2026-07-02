@@ -1,6 +1,6 @@
 import { estimateCost, resolveCategory, compileCwdRules } from "@mc/shared";
 import type { Store } from "../store.ts";
-import type { BackfillAdapter, BackfillOpts, BackfillReport, ProviderReport } from "./types.ts";
+import type { BackfillAdapter, BackfillOpts, BackfillReport, ProviderReport, RawSession } from "./types.ts";
 import { claudeBackfillAdapter } from "./adapters/claude.ts";
 import { codexBackfillAdapter } from "./adapters/codex.ts";
 import { hermesBackfillAdapter } from "./adapters/hermes.ts";
@@ -120,6 +120,14 @@ export async function runBackfill(store: Store, opts: BackfillOpts = {}): Promis
     }
   }
 
+  // Phase 1.5 (sub_sessions). Populate the per-subagent breakdown for historical
+  // sessions already in the store (from live reporting or this run's import) that
+  // lack it — the info lives in on-disk agent-*.jsonl transcripts. Idempotent and
+  // skips running sessions (the live reporter owns those).
+  if (!opts.dryRun) {
+    report.subSessions = runSubSessionsBackfill(store, registry, opts);
+  }
+
   // Phase 2 (Haiku enrichment). Skipped in dryRun (no writes). An injected
   // `analyze` (tests) overrides the real Anthropic batch analyzer, which is null
   // without an API key → enrichMissing returns skippedPhase.
@@ -134,4 +142,49 @@ export async function runBackfill(store: Store, opts: BackfillOpts = {}): Promis
   }
 
   return report;
+}
+
+/**
+ * Populate `sub_sessions` for historical sessions from on-disk subagent
+ * transcripts. For each adapter that exposes `subSessions`, re-walk its discovery
+ * and, for any session that is already in the store, isn't running (the live
+ * reporter owns those), and has no breakdown yet, build + upsert the breakdown.
+ * Idempotent (`hasSubSessions` skip) and fully guarded — one bad session never
+ * sinks the phase. Returns counts of sessions and rows written.
+ */
+export function runSubSessionsBackfill(
+  store: Store,
+  registry: BackfillAdapter[],
+  opts: BackfillOpts = {},
+): { sessions: number; rows: number } {
+  let sessions = 0;
+  let rows = 0;
+  for (const adapter of registry) {
+    if (!adapter.subSessions || !adapter.available(opts)) continue;
+    if (opts.providers && !opts.providers.includes(adapter.id)) continue;
+    let discovered: Iterable<RawSession> | AsyncIterable<RawSession>;
+    try {
+      discovered = adapter.discover(opts);
+    } catch {
+      continue; // provider guard
+    }
+    // subSessions adapters discover synchronously (claude); iterate as a plain
+    // iterable. (AsyncIterable adapters simply don't implement subSessions.)
+    for (const raw of discovered as Iterable<RawSession>) {
+      try {
+        const key = adapter.sessionKey(raw);
+        if (!store.has(key)) continue; // only sessions we have a row for
+        if (store.hasSubSessions(key)) continue; // idempotent
+        if (store.sessionState(key) === "running") continue; // live owns it
+        const subs = adapter.subSessions(raw);
+        if (!subs.length) continue;
+        store.upsertSubSessions(key, subs);
+        sessions++;
+        rows += subs.length;
+      } catch {
+        /* one bad session never sinks the phase */
+      }
+    }
+  }
+  return { sessions, rows };
 }

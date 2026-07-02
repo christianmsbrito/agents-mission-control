@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { Store } from "../store.ts";
-import { runBackfill } from "./index.ts";
+import { runBackfill, runSubSessionsBackfill } from "./index.ts";
 import type { BackfillAdapter } from "./types.ts";
 
 function fakeAdapter(over: Partial<BackfillAdapter> = {}): BackfillAdapter {
@@ -63,6 +63,78 @@ describe("runBackfill core", () => {
     const rep = await runBackfill(s, { registry: [fakeAdapter()], enrich: false, dryRun: true } as any);
     expect(rep.providers.fake.imported).toBe(1); // counted as would-import
     expect(s.has("A")).toBe(false);              // but not written
+    s.close();
+  });
+});
+
+describe("sub_sessions backfill phase", () => {
+  // adapter yielding one session "A" with a two-subagent breakdown.
+  const subAdapter = (over: Partial<BackfillAdapter> = {}) =>
+    fakeAdapter({
+      discover: function* () { yield { key: "A", ok: true }; },
+      subSessions: () => [
+        { agentId: "s1", kind: "Explore", tokensIn: 10, costUsd: 0.2, status: "finished" },
+        { agentId: "s2", kind: "general-purpose", tokensIn: 20, status: "crashed" },
+      ],
+      ...over,
+    });
+
+  test("populates sub_sessions for imported sessions", async () => {
+    const s = new Store(":memory:");
+    const rep = await runBackfill(s, { registry: [subAdapter()], enrich: false } as any);
+    expect(rep.subSessions).toEqual({ sessions: 1, rows: 2 });
+    const got = s.getSubagents("A");
+    expect(got.map((g) => g.agentId).sort()).toEqual(["s1", "s2"]);
+    expect(got.find((g) => g.agentId === "s2")!.status).toBe("crashed");
+    s.close();
+  });
+
+  test("idempotent: a second run adds nothing (skip-if-has)", async () => {
+    const s = new Store(":memory:");
+    await runBackfill(s, { registry: [subAdapter()], enrich: false } as any);
+    const rep2 = await runBackfill(s, { registry: [subAdapter()], enrich: false } as any);
+    expect(rep2.subSessions).toEqual({ sessions: 0, rows: 0 });
+    s.close();
+  });
+
+  test("populates a pre-existing (live-reported) session lacking a breakdown", () => {
+    const s = new Store(":memory:");
+    // Seed a live-reported session with NO subSessions (as an old-code server would).
+    s.record({ hostId: "h", hostLabel: "H", sentAt: 1,
+      sessions: [{ id: "h:1", provider: "claude", pid: 1, hostId: "h", hostLabel: "H",
+        cwd: "/r", category: "code", startedAt: 1, cpu: 0, memMb: 0, providerSessionId: "A" }] } as any, 1);
+    s.record({ hostId: "h", hostLabel: "H", sentAt: 2, sessions: [] } as any, 2); // close it
+    expect(s.hasSubSessions("A")).toBe(false);
+    const out = runSubSessionsBackfill(s, [subAdapter()], {});
+    expect(out).toEqual({ sessions: 1, rows: 2 });
+    expect(s.getSubagents("A").length).toBe(2);
+    s.close();
+  });
+
+  test("skips a running session (live reporter owns its status)", () => {
+    const s = new Store(":memory:");
+    s.record({ hostId: "h", hostLabel: "H", sentAt: 1,
+      sessions: [{ id: "h:1", provider: "claude", pid: 1, hostId: "h", hostLabel: "H",
+        cwd: "/r", category: "code", startedAt: 1, cpu: 0, memMb: 0, providerSessionId: "A" }] } as any, 1);
+    // still running (never closed)
+    const out = runSubSessionsBackfill(s, [subAdapter()], {});
+    expect(out).toEqual({ sessions: 0, rows: 0 });
+    expect(s.hasSubSessions("A")).toBe(false);
+    s.close();
+  });
+
+  test("skips sessions not in the store", () => {
+    const s = new Store(":memory:");
+    const out = runSubSessionsBackfill(s, [subAdapter()], {});
+    expect(out).toEqual({ sessions: 0, rows: 0 });
+    s.close();
+  });
+
+  test("dryRun writes no sub_sessions", async () => {
+    const s = new Store(":memory:");
+    const rep = await runBackfill(s, { registry: [subAdapter()], enrich: false, dryRun: true } as any);
+    expect(rep.subSessions).toBeUndefined();
+    expect(s.has("A")).toBe(false);
     s.close();
   });
 });

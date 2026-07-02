@@ -9,6 +9,7 @@ import type {
   PersistedSession,
   PersistedSessionState,
   PersistedSubSession,
+  SubSession,
   RetentionConfig,
   Session,
   SessionSample,
@@ -1099,6 +1100,44 @@ export class Store {
       .query("SELECT * FROM sub_sessions WHERE session_key = ? ORDER BY first_at ASC NULLS LAST, agent_id ASC")
       .all(sessionKey) as any[];
     return rows.map((r) => this.rowToSubSession(r));
+  }
+
+  /** True if any sub_sessions row exists for this session (backfill idempotency). */
+  hasSubSessions(sessionKey: string): boolean {
+    return !!this.db.query("SELECT 1 FROM sub_sessions WHERE session_key = ? LIMIT 1").get(sessionKey);
+  }
+
+  /** Lifecycle state of a session, or null if unknown. Lets backfill leave live
+   * (running) sessions to the reporter rather than stamping a stale status. */
+  sessionState(sessionKey: string): PersistedSessionState | null {
+    const r = this.db.query("SELECT state FROM sessions WHERE session_key = ?").get(sessionKey) as any;
+    return r ? (r.state as PersistedSessionState) : null;
+  }
+
+  /** Upsert a batch of sub_sessions for one session (backfill path; the live path
+   * upserts them inside record()). Wrapped in a transaction for bulk speed. */
+  upsertSubSessions(sessionKey: string, subs: SubSession[]): void {
+    const tx = this.db.transaction((rows: SubSession[]) => {
+      for (const ss of rows) {
+        this.upsertSubSession.run({
+          $session_key: sessionKey,
+          $agent_id: ss.agentId,
+          $kind: ss.kind ?? null,
+          $tokens_in: ss.tokensIn ?? null,
+          $tokens_out: ss.tokensOut ?? null,
+          $tokens_cache_read: ss.tokensCacheRead ?? null,
+          $tokens_cache_write: ss.tokensCacheWrite ?? null,
+          $cost_usd: ss.costUsd ?? null,
+          $model: ss.model ?? null,
+          $peak_context_tokens: ss.peakContextTokens ?? null,
+          $tools_used: ss.toolsUsed ? JSON.stringify(ss.toolsUsed) : null,
+          $first_at: ss.firstAt ?? null,
+          $last_at: ss.lastAt ?? null,
+          $status: ss.status ?? null,
+        });
+      }
+    });
+    tx(subs);
   }
 
   private rowToSubSession(r: any): PersistedSubSession {

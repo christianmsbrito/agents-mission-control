@@ -1,4 +1,4 @@
-import type { PersistedSession, SessionSample, PersistedEvent } from "@mc/shared";
+import type { PersistedSession, SessionSample, PersistedEvent, SubSession } from "@mc/shared";
 import type { BatchAnalyze } from "./enrich.ts";
 
 export type RawSession = unknown;
@@ -15,6 +15,9 @@ export interface BackfillAdapter {
   };
   /** Role-tagged conversation tail for the Haiku enrichment phase (optional). */
   enrichInput?(raw: RawSession): string;
+  /** Per-subagent usage breakdown for a discovered session (optional; Claude only).
+   * Used by the sub_sessions backfill phase to populate historical rows. */
+  subSessions?(raw: RawSession): SubSession[];
 }
 
 export interface BackfillOpts {
@@ -33,4 +36,6 @@ export interface ProviderReport { imported: number; skipped: number; failed: boo
 export interface BackfillReport {
   providers: Record<string, ProviderReport>;
   enrich?: { enriched: number; degraded: number; skippedPhase: boolean };
+  /** sub_sessions backfill phase: sessions that got a breakdown + rows written. */
+  subSessions?: { sessions: number; rows: number };
 }

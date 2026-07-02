@@ -6,8 +6,11 @@ import type { PersistedSession, SessionSample, PersistedEvent } from "@mc/shared
 import {
   parseClaudeTranscript,
   addSubagentUsage,
+  buildSubSessions,
+  subagentFilesInDir,
   type SubagentUsage,
 } from "../../../../reporter/src/providers/claude.ts";
+import type { SubSession } from "@mc/shared";
 import type { BackfillAdapter, BackfillOpts, RawSession } from "../types.ts";
 import { buildClosedSession, trimTail, type Point } from "./_common.ts";
 
@@ -239,6 +242,25 @@ export const claudeBackfillAdapter: BackfillAdapter = {
       return claudeEnrichInput(readFileSync(r.path, "utf8"));
     } catch {
       return "";
+    }
+  },
+  subSessions(raw: RawSession): SubSession[] {
+    const r = raw as ClaudeRaw;
+    try {
+      const files = subagentFilesInDir(join(dirname(r.path), r.sessionId, "subagents"));
+      if (!files.length) return [];
+      // Historical import: the parent process is gone, so every subagent has
+      // settled — status resolves to finished (or crashed on a last-turn error).
+      // parentActive=false short-circuits the running/stalled branches, so the
+      // completed-set and freshness inputs are irrelevant here.
+      return buildSubSessions(files, new Map(), {
+        now: r.mtime,
+        freshMs: 0,
+        parentActive: false,
+        completed: new Set(),
+      });
+    } catch {
+      return [];
     }
   },
 };
