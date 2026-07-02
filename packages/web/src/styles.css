@@ -658,6 +658,56 @@ input, textarea { font-family: inherit; }
 .cmd.danger:hover { color: var(--ko); border-color: var(--ko); }
 .cmd.go { color: var(--gold); border-color: var(--gold-deep); }
 
+/* "active now" pip in the meta line — a faint pulsing dot when the hero is working. */
+.meta .pip { color: var(--battle); text-shadow: 0 0 5px currentColor; animation: blink 1.4s steps(2) infinite; }
+
+/* ------- subagent breakdown (live card): collapsed row -> list -> per-row detail ------- */
+.subs { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.subs-head, .subrow-head {
+  display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+  background: var(--sunken); border: 1.5px solid var(--win-edge); border-radius: 5px;
+  color: var(--ink-dim); padding: 4px 8px; font-size: 12px; cursor: pointer;
+}
+.subs-head:hover, .subrow-head:hover { border-color: var(--gold); color: var(--ink); }
+.subs-head .tw, .subrow-head .tw { color: var(--gold-deep); flex: none; }
+.subs-head .lbl { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subs-head .main { color: var(--ink-faint); white-space: nowrap; }
+.subs-list { display: flex; flex-direction: column; gap: 3px; padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--gold-deep) 45%, transparent); }
+.subrow { display: flex; flex-direction: column; gap: 2px; }
+.subrow-head { padding: 3px 7px; }
+.subrow-head .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.subrow-head .c { flex: none; font-variant-numeric: tabular-nums; }
+.subrow-head .c.gil { color: var(--gold); }
+.subrow-head .c.tok { color: var(--ink-dim); }
+.subrow-head .c.tools { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-faint); }
+.subrow-detail { display: flex; flex-direction: column; gap: 1px; padding: 2px 7px 4px 22px; font-size: 11px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+/* ------- active-fraction bar (sheet) ------- */
+.actbar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.actbar .track {
+  flex: 1 1 auto; height: 8px; border-radius: 3px; overflow: hidden;
+  background: var(--sunken); border: 1.5px solid var(--frame-dark);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.actbar .fill {
+  display: block; height: 100%; min-width: 2px; border-radius: 2px 0 0 2px;
+  background-color: var(--battle); box-shadow: 0 0 6px var(--battle);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0) 50%);
+}
+.actbar .lab { font-size: 11px; color: var(--ink-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ------- subagent table (sheet) ------- */
+.subtable { display: flex; flex-direction: column; gap: 3px; }
+.subtable-head, .subtable-row {
+  display: grid; grid-template-columns: minmax(0, 1.4fr) 60px 64px 64px minmax(0, 1.2fr);
+  gap: 10px; align-items: center; font-size: 12px;
+}
+.subtable-head { font-family: var(--font-display); font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--ink-faint); padding-bottom: 2px; border-bottom: 1px dashed color-mix(in srgb, var(--win-edge) 30%, transparent); }
+.subtable-head [data-align="right"], .subtable-row [data-align="right"] { text-align: right; font-variant-numeric: tabular-nums; }
+.subtable-row { padding: 3px 0; border-bottom: 1px dashed color-mix(in srgb, var(--win-edge) 18%, transparent); }
+.subtable-row .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.subtable-row .tools { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-faint); }
+
 /* ======================================================================
    QUEST BOARD (kanban)
    ====================================================================== */
@@ -699,7 +749,7 @@ input, textarea { font-family: inherit; }
 /* shared column grid for header + rows */
 .rec-head, .rec {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) 132px 78px 76px 78px 96px 34px;
+  grid-template-columns: 26px minmax(0, 1fr) 132px 78px 64px 76px 78px 96px 34px;
   gap: 12px; align-items: center;
 }
 

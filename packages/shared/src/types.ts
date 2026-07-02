@@ -67,8 +67,34 @@ export type Session = {
   costUsd?: number;
   /** Current kanban work units, when the provider exposes a todo list. */
   workItems?: WorkItem[];
+  /** Per-subagent usage breakdown, when the provider spawns in-process subagents
+   * (currently Claude Task/Agent). The session's own token/cost totals ABOVE are
+   * the true total (main + all subagents); main-only = total − Σ subSessions. */
+  subSessions?: SubSession[];
   /** The template that spawned this session, when launched via Mission Control. */
   templateId?: string;
+};
+
+/** One in-process subagent's usage, parsed from its own transcript. Subagents
+ * share the parent's OS process (and thus its CPU/lifespan) — this is a usage
+ * breakdown, not a separately-tracked process. */
+export type SubSession = {
+  /** Provider-native subagent id (Claude `agentId`); stable within the parent. */
+  agentId: string;
+  /** Subagent type/label when known (e.g. "Explore", "code-reviewer"). */
+  kind?: string;
+  tokensIn?: number;
+  tokensOut?: number;
+  tokensCacheRead?: number;
+  tokensCacheWrite?: number;
+  costUsd?: number;
+  model?: string;
+  /** Peak context-window occupancy this subagent reached. */
+  peakContextTokens?: number;
+  toolsUsed?: string[];
+  /** Epoch ms of the subagent's first / last transcript entry. */
+  firstAt?: number;
+  lastAt?: number;
 };
 
 /** A single kanban-style work unit ("Quest") within a session. Sourced passively
@@ -334,7 +360,15 @@ export type PersistedSession = {
   attention?: boolean;
   ask?: string;
   suggestion?: string;
+  /** Accumulated ms the session was "active" (cpu>threshold OR active flag) across
+   * its sampled lifespan. Denominator for the activity gauge is the lifespan
+   * (`(endedAt ?? lastSeenAt) − startedAt`). Downsample-proof: accumulated on the
+   * row, not derived from (lossy) condensed samples. */
+  activeMs?: number;
 };
+
+/** A persisted per-subagent usage row: {@link SubSession} keyed to its parent. */
+export type PersistedSubSession = SubSession & { sessionKey: string };
 
 /** A time-series sample row. */
 export type SessionSample = {

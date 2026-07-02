@@ -1328,3 +1328,150 @@ describe("Store managed quests", () => {
     s.close();
   });
 });
+
+describe("Store sub-sessions", () => {
+  function rep(sessions: any[], sentAt = 1000): any {
+    return { hostId: "h1", hostLabel: "H1", sentAt, sessions };
+  }
+  function sess(over: any = {}): any {
+    return { id: "h1:1", provider: "claude", pid: 1, hostId: "h1", hostLabel: "H1",
+      cwd: "/x", category: "code", startedAt: 500, cpu: 0, memMb: 0,
+      providerSessionId: "SID", ...over };
+  }
+
+  test("record upserts subSessions and getSubagents reads them back", () => {
+    const s = new Store(":memory:");
+    s.record(rep([sess({ subSessions: [
+      { agentId: "a1", kind: "Explore", tokensIn: 100, tokensOut: 20,
+        tokensCacheRead: 5, tokensCacheWrite: 3, costUsd: 0.5, model: "opus",
+        peakContextTokens: 3000, toolsUsed: ["Grep", "Read"], firstAt: 600, lastAt: 700 },
+      { agentId: "a2", kind: "code-review", tokensOut: 40 },
+    ] })], 1000), 1000);
+
+    const subs = s.getSubagents("SID");
+    expect(subs.map((x) => x.agentId).sort()).toEqual(["a1", "a2"]);
+    const a1 = subs.find((x) => x.agentId === "a1")!;
+    expect(a1.sessionKey).toBe("SID");
+    expect(a1.kind).toBe("Explore");
+    expect(a1.tokensIn).toBe(100);
+    expect(a1.costUsd).toBe(0.5);
+    expect(a1.model).toBe("opus");
+    expect(a1.peakContextTokens).toBe(3000);
+    expect(a1.toolsUsed).toEqual(["Grep", "Read"]);
+    expect(a1.firstAt).toBe(600);
+    expect(a1.lastAt).toBe(700);
+    s.close();
+  });
+
+  test("record upsert overwrites a subagent's later totals", () => {
+    const s = new Store(":memory:");
+    s.record(rep([sess({ subSessions: [{ agentId: "a1", tokensOut: 10 }] })], 1000), 1000);
+    s.record(rep([sess({ subSessions: [{ agentId: "a1", tokensOut: 99, costUsd: 1.2 }] })], 2000), 2000);
+    const subs = s.getSubagents("SID");
+    expect(subs.length).toBe(1);
+    expect(subs[0].tokensOut).toBe(99);
+    expect(subs[0].costUsd).toBe(1.2);
+    s.close();
+  });
+
+  test("subagents are NOT inserted into the sessions registry (no double-count)", () => {
+    const s = new Store(":memory:");
+    s.record(rep([sess({ subSessions: [{ agentId: "a1", tokensOut: 10 }] })], 1000), 1000);
+    // Only the parent session row exists in `sessions`.
+    const rows = s.db.query("SELECT session_key FROM sessions").all() as any[];
+    expect(rows.map((r) => r.session_key)).toEqual(["SID"]);
+    s.close();
+  });
+
+  test("getSubagents returns [] for an unknown session", () => {
+    const s = new Store(":memory:");
+    expect(s.getSubagents("nope")).toEqual([]);
+    s.close();
+  });
+});
+
+describe("Store activeMs", () => {
+  function sess(over: any = {}): any {
+    return { id: "h1:1", provider: "claude", pid: 1, hostId: "h1", hostLabel: "H1",
+      cwd: "/x", category: "code", startedAt: 500, cpu: 0, memMb: 0,
+      providerSessionId: "SID", ...over };
+  }
+  function rep(sessions: any[], sentAt: number): any {
+    return { hostId: "h1", hostLabel: "H1", sentAt, sessions };
+  }
+
+  test("accumulates sampleIntervalMs per active sampled tick (cpu>threshold)", () => {
+    const s = new Store(":memory:", { sampleIntervalMs: 100 });
+    // t=1000 first sample, active (cpu 5 > default 1).
+    s.record(rep([sess({ cpu: 5 })], 1000), 1000);
+    // t=1050 within interval -> not sampled -> no accrual.
+    s.record(rep([sess({ cpu: 5 })], 1050), 1050);
+    // t=1100 sampled, active again.
+    s.record(rep([sess({ cpu: 5 })], 1100), 1100);
+    // t=1200 sampled, idle (cpu 0, no active flag) -> no accrual.
+    s.record(rep([sess({ cpu: 0 })], 1200), 1200);
+    const got = s.getSession("SID")!.session;
+    expect(got.activeMs).toBe(200); // two active sampled ticks * 100ms
+    s.close();
+  });
+
+  test("active flag rescues cpu=0 ticks (blocked on API)", () => {
+    const s = new Store(":memory:", { sampleIntervalMs: 100 });
+    s.record(rep([sess({ cpu: 0, active: true })], 1000), 1000);
+    expect(s.getSession("SID")!.session.activeMs).toBe(100);
+    s.close();
+  });
+
+  test("threshold is configurable via constructor/env (MC_ACTIVE_CPU_PCT)", () => {
+    // Simulate a higher threshold: cpu 3 should NOT count when threshold is 5.
+    const prev = process.env.MC_ACTIVE_CPU_PCT;
+    process.env.MC_ACTIVE_CPU_PCT = "5";
+    try {
+      const s = new Store(":memory:", { sampleIntervalMs: 100 });
+      s.record(rep([sess({ cpu: 3 })], 1000), 1000);
+      s.record(rep([sess({ cpu: 8 })], 1100), 1100);
+      expect(s.getSession("SID")!.session.activeMs).toBe(100); // only the cpu=8 tick
+      s.close();
+    } finally {
+      if (prev === undefined) delete process.env.MC_ACTIVE_CPU_PCT;
+      else process.env.MC_ACTIVE_CPU_PCT = prev;
+    }
+  });
+
+  test("backfillActiveMs computes active_ms from existing raw samples (idempotent)", () => {
+    const s = new Store(":memory:", { sampleIntervalMs: 100 });
+    // Seed raw samples directly (as if from a pre-activeMs DB), leaving active_ms NULL.
+    s.importSession(
+      { sessionKey: "OLD", liveId: "h1:9", provider: "claude", hostId: "h1",
+        hostLabel: "H1", cwd: "/x", category: "code", startedAt: 0, state: "closed",
+        endedAt: 500, lastSeenAt: 500 } as any,
+      [
+        { sessionKey: "OLD", at: 100, resolution: "raw", cpu: 5, active: 0 },
+        { sessionKey: "OLD", at: 200, resolution: "raw", cpu: 0, active: 1 },
+        { sessionKey: "OLD", at: 300, resolution: "raw", cpu: 0, active: 0 },
+      ] as any,
+      [],
+    );
+    // active_ms should be NULL before backfill.
+    const before: any = s.db.query("SELECT active_ms FROM sessions WHERE session_key='OLD'").get();
+    expect(before.active_ms).toBeNull();
+
+    s.backfillActiveMs();
+    // 2 active samples (cpu>1 OR active=1) * 100ms.
+    expect(s.getSession("OLD")!.session.activeMs).toBe(200);
+
+    // Idempotent: a second run does not touch already-set rows.
+    s.backfillActiveMs();
+    expect(s.getSession("OLD")!.session.activeMs).toBe(200);
+    s.close();
+  });
+
+  test("backfill does not overwrite a live-accumulated active_ms", () => {
+    const s = new Store(":memory:", { sampleIntervalMs: 100 });
+    s.record(rep([sess({ cpu: 5 })], 1000), 1000);
+    const live = s.getSession("SID")!.session.activeMs;
+    s.backfillActiveMs();
+    expect(s.getSession("SID")!.session.activeMs).toBe(live);
+    s.close();
+  });
+});

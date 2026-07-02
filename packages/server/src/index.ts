@@ -49,6 +49,13 @@ if (DB_FILE !== ":memory:") {
   }
 }
 const store = new Store(DB_FILE, { retention: config.retention });
+// One-time, idempotent: seed active_ms for pre-activeMs sessions from their raw
+// samples. Best-effort like every other store call at this edge.
+try {
+  store.backfillActiveMs();
+} catch (err) {
+  console.warn("[store] active_ms backfill failed (non-fatal):", err);
+}
 
 async function persistConfig(): Promise<void> {
   try {
@@ -497,6 +504,10 @@ function handleReadApi(req: Request, url: URL): Response | null {
     if (rest.endsWith("/quests")) {
       const key = decodeURIComponent(rest.slice(0, -"/quests".length));
       return Response.json(store.getQuests(key));
+    }
+    if (rest.endsWith("/subagents")) {
+      const key = decodeURIComponent(rest.slice(0, -"/subagents".length));
+      return Response.json(store.getSubagents(key));
     }
     if (rest.endsWith("/samples")) {
       const key = decodeURIComponent(rest.slice(0, -"/samples".length));

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { PersistedSession, PersistedEvent, SessionSample } from "@mc/shared";
+import type { PersistedSession, PersistedEvent, SessionSample, PersistedSubSession } from "@mc/shared";
 
 /** Filter accepted by the /api/sessions endpoint (all optional). */
 export type HistoryFilter = {
@@ -147,6 +147,46 @@ export function useSessionDetail(key: string | null) {
       .catch((e) => {
         if (alive && e.name !== "AbortError")
           setState({ detail: null, samples: [], loading: false, error: String(e?.message ?? e) });
+      });
+    return () => {
+      alive = false;
+      ctrl.abort();
+    };
+  }, [key]);
+
+  return state;
+}
+
+type SubagentsState = { subagents: PersistedSubSession[]; loading: boolean };
+
+/**
+ * Fetch one session's persisted per-subagent breakdown. Mirrors
+ * {@link useSessionDetail}: plain fetch, only fires for a non-null key. Degrades
+ * gracefully — a 404 (endpoint not deployed yet during parallel dev) or any error
+ * resolves to an empty list rather than surfacing, since the table is optional.
+ */
+export function useSessionSubagents(key: string | null) {
+  const [state, setState] = useState<SubagentsState>({ subagents: [], loading: false });
+
+  useEffect(() => {
+    if (key === null) {
+      setState({ subagents: [], loading: false });
+      return;
+    }
+    let alive = true;
+    const ctrl = new AbortController();
+    const enc = encodeURIComponent(key);
+    setState({ subagents: [], loading: true });
+    fetch(`/api/sessions/${enc}/subagents`, { signal: ctrl.signal })
+      .then(async (r) => {
+        if (!r.ok) return [] as PersistedSubSession[]; // 404 / not-yet-built endpoint → empty
+        return (await r.json()) as PersistedSubSession[];
+      })
+      .then((subagents) => {
+        if (alive) setState({ subagents: Array.isArray(subagents) ? subagents : [], loading: false });
+      })
+      .catch((e) => {
+        if (alive && e.name !== "AbortError") setState({ subagents: [], loading: false });
       });
     return () => {
       alive = false;

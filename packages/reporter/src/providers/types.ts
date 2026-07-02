@@ -1,4 +1,4 @@
-import type { Session } from "@mc/shared";
+import type { Session, SubSession } from "@mc/shared";
 import type { ProcInfo } from "../procscan.ts";
 
 /** Context handed to plugins; `home` is injectable for tests. */
@@ -43,6 +43,10 @@ export type Enrichment = Partial<
   summaryInput?: string;
   /** The session's opening user prompts, for the broad subject — not stored on Session. */
   subjectInput?: string;
+  /** Per-subagent usage breakdown. The token counters ABOVE stay the TOTAL
+   * (main + Σ subSessions); this is the itemized split. Flows through
+   * `collect.ts` (spread into `Session`) untouched. */
+  subSessions?: SubSession[];
 };
 
 export interface ProviderPlugin {

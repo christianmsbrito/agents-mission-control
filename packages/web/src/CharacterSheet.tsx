@@ -1,7 +1,7 @@
 import { useEffect } from "react";
-import { useSessionDetail, sparklinePoints } from "./useHistory.ts";
+import { useSessionDetail, useSessionSubagents, sparklinePoints } from "./useHistory.ts";
 import { useSessionQuests } from "./useQuery.ts";
-import { classOf, xpOf, levelOf, charName, gold, type FateState } from "./rpg.ts";
+import { classOf, xpOf, levelOf, charName, gold, activeFraction, subTokens, type FateState } from "./rpg.ts";
 import { fmtCost, fmtTokens, fmtUptime, fmtAgo } from "./format.ts";
 import { useLex } from "./lexicon.ts";
 
@@ -19,6 +19,7 @@ function Spark({ values, color }: { values: number[]; color: string }) {
 export function CharacterSheet({ sessionKey, now, onClose }: { sessionKey: string; now: number; onClose: () => void }) {
   const { detail, samples, loading } = useSessionDetail(sessionKey);
   const quests = useSessionQuests(sessionKey);
+  const { subagents } = useSessionSubagents(sessionKey);
   const lex = useLex();
 
   useEffect(() => {
@@ -30,6 +31,8 @@ export function CharacterSheet({ sessionKey, now, onClose }: { sessionKey: strin
   const s = detail?.session;
   const cls = s ? classOf(s.provider) : null;
   const xp = s ? xpOf(s) : 0;
+  // Active fraction of the session's lifespan (activeMs / lifespan), when persisted.
+  const active = s ? activeFraction(s) : undefined;
 
   // System usage. `s` here is a PersistedSession (not the live Session), so pid/cpu/mem
   // aren't on it directly: pid lives inside liveId (`${hostId}:${pid}`); cpu/mem are only
@@ -67,6 +70,7 @@ export function CharacterSheet({ sessionKey, now, onClose }: { sessionKey: strin
                 <div className="kv"><span className="k">Peak context</span><span className="v">{fmtTokens(s.peakContextTokens)}</span></div>
                 <div className="kv"><span className="k">{lex.realm[0].toUpperCase() + lex.realm.slice(1)}</span><span className="v">{s.hostLabel}</span></div>
                 <div className="kv"><span className="k">Lifespan</span><span className="v">{s.endedAt ? fmtUptime(s.startedAt, s.endedAt) : fmtUptime(s.startedAt, now)}</span></div>
+                <div className="kv"><span className="k">Active time</span><span className="v">{s.activeMs != null ? `${fmtUptime(0, s.activeMs)}${active != null ? ` (${Math.round(active * 100)}%)` : ""}` : "—"}</span></div>
                 <div className="kv"><span className="k">Last seen</span><span className="v">{fmtAgo(s.lastSeenAt, now)}</span></div>
                 <div className="kv"><span className="k">Cwd</span><span className="v" style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis" }}>{s.cwd ?? "—"}</span></div>
                 <div className="kv"><span className="k">Out tokens</span><span className="v">{fmtTokens(s.tokensOut)}</span></div>
@@ -75,6 +79,12 @@ export function CharacterSheet({ sessionKey, now, onClose }: { sessionKey: strin
                 <div className="kv"><span className="k">Memory</span><span className="v">{memMb != null ? `${memMb}MB` : "—"}</span></div>
                 <div className="kv"><span className="k">Host</span><span className="v">{s.hostLabel}</span></div>
               </div>
+              {active != null && (
+                <div className="actbar" title={`Active ${Math.round(active * 100)}% of lifespan`}>
+                  <span className="track"><span className="fill" style={{ width: `${Math.round(active * 100)}%` }} /></span>
+                  <span className="lab">active {Math.round(active * 100)}% · idle {Math.round((1 - active) * 100)}%</span>
+                </div>
+              )}
             </section>
 
             {quests.data.length > 0 && (
@@ -85,6 +95,30 @@ export function CharacterSheet({ sessionKey, now, onClose }: { sessionKey: strin
                     <div className="ql" key={q.itemKey} data-s={q.status}>
                       <span className="mark">{MARK[q.status]}</span>
                       <span>{q.subject}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {subagents.length > 0 && (
+              <section>
+                <h4>Subagents <span className="ct" style={{ color: "var(--ink-faint)", fontWeight: 400 }}>{subagents.length}</span></h4>
+                <div className="subtable">
+                  <div className="subtable-head">
+                    <span>Agent</span>
+                    <span data-align="right">{lex.gil}</span>
+                    <span data-align="right">Tokens</span>
+                    <span data-align="right">Peak ctx</span>
+                    <span>Tools</span>
+                  </div>
+                  {[...subagents].sort((a, b) => (b.costUsd ?? 0) - (a.costUsd ?? 0)).map((sub) => (
+                    <div className="subtable-row" key={sub.agentId}>
+                      <span className="nm" title={sub.agentId}>{sub.kind || sub.agentId.slice(0, 8)}{sub.model ? <small style={{ color: "var(--ink-faint)" }}> · {sub.model.replace(/^claude-|-\d.*$/g, "")}</small> : null}</span>
+                      <span data-align="right" style={{ color: "var(--gold)" }}>{fmtCost(sub.costUsd)}</span>
+                      <span data-align="right">{fmtTokens(subTokens(sub))}</span>
+                      <span data-align="right">{fmtTokens(sub.peakContextTokens)}</span>
+                      <span className="tools" title={(sub.toolsUsed ?? []).join(", ")}>{(sub.toolsUsed ?? []).slice(0, 4).join(", ") || "—"}</span>
                     </div>
                   ))}
                 </div>

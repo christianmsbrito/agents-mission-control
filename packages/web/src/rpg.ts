@@ -1,7 +1,7 @@
 // The semantic bridge: agent-session data -> RPG character stats. Pure functions,
 // no React, no DOM — so the metaphor is testable and theme-agnostic. Themes style
 // these; they don't redefine them.
-import type { Session, PersistedSession } from "@mc/shared";
+import type { Session, PersistedSession, SubSession } from "@mc/shared";
 
 /** The VISUAL identity of a provider's class — sigil + portrait hue. The class
  * NAME (job) is theme-dependent and lives in the lexicon (lex.jobs), not here. */
@@ -119,4 +119,42 @@ export function liveKey(s: { providerSessionId?: string; hostId: string; pid: nu
 export function gold(usd?: number): string {
   if (usd == null) return "0";
   return Math.round(usd * 100).toLocaleString(); // cents == "gil", readable integers
+}
+
+/** The main-vs-total split for a session with in-process subagents. The session's
+ * own totals ARE the true total (main + all subagents, per the cost fix); main-only
+ * is total − Σ subSessions. `subPct` is the subagents' share of the total cost.
+ * Clamped to ≥0 so a rounding/parse skew never renders a negative "main". */
+export function subSplit(s: {
+  costUsd?: number;
+  subSessions?: SubSession[];
+}): { subCount: number; subCost: number; mainCost: number; subPct: number } {
+  const subs = s.subSessions ?? [];
+  const total = s.costUsd ?? 0;
+  const subCost = subs.reduce((a, x) => a + (x.costUsd ?? 0), 0);
+  const mainCost = Math.max(0, total - subCost);
+  const subPct = total > 0 ? Math.round((subCost / total) * 100) : 0;
+  return { subCount: subs.length, subCost, mainCost, subPct };
+}
+
+/** Total tokens across a subagent's four token buckets (for its list row). */
+export function subTokens(x: SubSession): number {
+  return (x.tokensIn ?? 0) + (x.tokensOut ?? 0) + (x.tokensCacheRead ?? 0) + (x.tokensCacheWrite ?? 0);
+}
+
+/** Active fraction (0..1) of a persisted session's lifespan: activeMs / lifespan,
+ * where lifespan = (endedAt ?? lastSeenAt) − startedAt. Undefined when activeMs is
+ * absent (never sampled / feature not yet populated) or the lifespan is non-positive. */
+export function activeFraction(s: {
+  activeMs?: number;
+  startedAt: number;
+  endedAt?: number;
+  lastSeenAt?: number;
+}): number | undefined {
+  if (s.activeMs == null) return undefined;
+  const end = s.endedAt ?? s.lastSeenAt;
+  if (end == null) return undefined;
+  const lifespan = end - s.startedAt;
+  if (lifespan <= 0) return undefined;
+  return Math.min(1, Math.max(0, s.activeMs / lifespan));
 }

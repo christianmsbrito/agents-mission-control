@@ -8,6 +8,7 @@ import type {
   PersistedEventType,
   PersistedSession,
   PersistedSessionState,
+  PersistedSubSession,
   RetentionConfig,
   Session,
   SessionSample,
@@ -248,6 +249,10 @@ export class Store {
   /** Per-session last raw-sample time (sessionKey -> ms). Gates sampling. */
   private lastSampleAt = new Map<string, number>();
   private sampleIntervalMs: number;
+  /** CPU-percent floor above which a tick counts as "active" for activeMs
+   * accumulation (a tick also counts when `session.active` is set). From env
+   * `MC_ACTIVE_CPU_PCT`, default 1 — any measurable CPU (see design doc). */
+  private readonly activeCpuThreshold: number;
   /** Full retention policy (age ladder + size ceiling + compaction cadence).
    * Mutable so the live store can adopt Settings-panel edits via setRetention. */
   private retention: RetentionConfig;
@@ -264,6 +269,8 @@ export class Store {
   private readonly closeStaleOrphans;
   private readonly applyEnrich;
   private readonly upsertWorkItem;
+  private readonly upsertSubSession;
+  private readonly accrueActiveMs;
   /**
    * Backward-compatible constructor. `opts.sampleIntervalMs` (legacy) still works
    * and, if given, overrides `opts.retention.sampleIntervalMs`. Anything omitted
@@ -276,6 +283,7 @@ export class Store {
     this.retention = { ...DEFAULT_RETENTION, ...(opts?.retention ?? {}) };
     if (opts?.sampleIntervalMs != null) this.retention.sampleIntervalMs = opts.sampleIntervalMs;
     this.sampleIntervalMs = this.retention.sampleIntervalMs;
+    this.activeCpuThreshold = Number(process.env.MC_ACTIVE_CPU_PCT ?? 1) || 0;
     this.db = new Database(path);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.migrate();
@@ -371,6 +379,28 @@ export class Store {
          active_form = excluded.active_form, position = excluded.position,
          updated_at = excluded.updated_at`,
     );
+    // Subagent breakdown, keyed to its parent. Latest snapshot wins (a subagent's
+    // transcript totals are monotonic within the parent), mirroring work_items.
+    this.upsertSubSession = this.db.query(
+      `INSERT INTO sub_sessions (
+         session_key, agent_id, kind, tokens_in, tokens_out, tokens_cache_read,
+         tokens_cache_write, cost_usd, model, peak_context_tokens, tools_used, first_at, last_at
+       ) VALUES (
+         $session_key, $agent_id, $kind, $tokens_in, $tokens_out, $tokens_cache_read,
+         $tokens_cache_write, $cost_usd, $model, $peak_context_tokens, $tools_used, $first_at, $last_at
+       )
+       ON CONFLICT(session_key, agent_id) DO UPDATE SET
+         kind = excluded.kind, tokens_in = excluded.tokens_in, tokens_out = excluded.tokens_out,
+         tokens_cache_read = excluded.tokens_cache_read, tokens_cache_write = excluded.tokens_cache_write,
+         cost_usd = excluded.cost_usd, model = excluded.model,
+         peak_context_tokens = excluded.peak_context_tokens, tools_used = excluded.tools_used,
+         first_at = excluded.first_at, last_at = excluded.last_at`,
+    );
+    // Accrue one sampled interval onto a session's activeMs. Downsample-proof:
+    // the accumulator lives on the row, not derived from (lossy) condensed samples.
+    this.accrueActiveMs = this.db.query(
+      "UPDATE sessions SET active_ms = COALESCE(active_ms, 0) + $delta WHERE session_key = $session_key",
+    );
   }
   private migrate(): void {
     this.db.exec(`
@@ -410,6 +440,14 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS ix_work_items_key ON work_items(session_key);
       CREATE INDEX IF NOT EXISTS ix_work_items_status ON work_items(status);
+      CREATE TABLE IF NOT EXISTS sub_sessions (
+        session_key TEXT NOT NULL, agent_id TEXT NOT NULL, kind TEXT,
+        tokens_in INTEGER, tokens_out INTEGER, tokens_cache_read INTEGER,
+        tokens_cache_write INTEGER, cost_usd REAL, model TEXT,
+        peak_context_tokens INTEGER, tools_used TEXT, first_at INTEGER, last_at INTEGER,
+        PRIMARY KEY (session_key, agent_id)
+      );
+      CREATE INDEX IF NOT EXISTS ix_sub_sessions_key ON sub_sessions(session_key);
       CREATE TABLE IF NOT EXISTS templates (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL,
         args_json TEXT, prompt TEXT, cwd TEXT, rpg_json TEXT, backend TEXT,
@@ -425,7 +463,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS ix_quests_status ON quests(status);
     `);
     // Guarded ALTERs for pre-existing DBs created before the enrichment columns.
-    for (const col of ["summary TEXT", "attention INTEGER", "ask TEXT", "suggestion TEXT", "template_id TEXT"]) {
+    for (const col of ["summary TEXT", "attention INTEGER", "ask TEXT", "suggestion TEXT", "template_id TEXT", "active_ms INTEGER"]) {
       try { this.db.exec(`ALTER TABLE sessions ADD COLUMN ${col}`); } catch { /* already present */ }
     }
     try { this.db.exec("ALTER TABLE templates ADD COLUMN backend TEXT"); } catch { /* already present */ }
@@ -672,6 +710,24 @@ export class Store {
           });
         }
 
+        for (const ss of session.subSessions ?? []) {
+          this.upsertSubSession.run({
+            $session_key: key,
+            $agent_id: ss.agentId,
+            $kind: ss.kind ?? null,
+            $tokens_in: ss.tokensIn ?? null,
+            $tokens_out: ss.tokensOut ?? null,
+            $tokens_cache_read: ss.tokensCacheRead ?? null,
+            $tokens_cache_write: ss.tokensCacheWrite ?? null,
+            $cost_usd: ss.costUsd ?? null,
+            $model: ss.model ?? null,
+            $peak_context_tokens: ss.peakContextTokens ?? null,
+            $tools_used: ss.toolsUsed ? JSON.stringify(ss.toolsUsed) : null,
+            $first_at: ss.firstAt ?? null,
+            $last_at: ss.lastAt ?? null,
+          });
+        }
+
         const before = prev.get(key);
         if (!before) {
           this.insertEvent({ at: now, sessionKey: key, type: "session.started",
@@ -736,6 +792,11 @@ export class Store {
           $active: session.active ? 1 : 0,
         });
         this.lastSampleAt.set(key, now);
+        // Piggyback activity time on the raw-sample gate: each active sampled tick
+        // adds one interval to activeMs (downsample-proof; see design doc).
+        if ((session.cpu ?? 0) > this.activeCpuThreshold || session.active === true) {
+          this.accrueActiveMs.run({ $delta: this.sampleIntervalMs, $session_key: key });
+        }
       }
 
       // Sessions present last tick for this host but gone now: closed.
@@ -1022,6 +1083,52 @@ export class Store {
       .query("SELECT * FROM work_items WHERE session_key = ? ORDER BY position ASC, created_at ASC")
       .all(sessionKey) as any[];
     return rows.map((r) => this.rowToWorkItem(r));
+  }
+
+  /** Per-subagent usage breakdown for one session (Claude Task/Agent subagents),
+   * ordered by first-seen then agent id. Empty for sessions without subagents. */
+  getSubagents(sessionKey: string): PersistedSubSession[] {
+    const rows = this.db
+      .query("SELECT * FROM sub_sessions WHERE session_key = ? ORDER BY first_at ASC NULLS LAST, agent_id ASC")
+      .all(sessionKey) as any[];
+    return rows.map((r) => this.rowToSubSession(r));
+  }
+
+  private rowToSubSession(r: any): PersistedSubSession {
+    return {
+      sessionKey: r.session_key,
+      agentId: r.agent_id,
+      kind: r.kind ?? undefined,
+      tokensIn: r.tokens_in ?? undefined,
+      tokensOut: r.tokens_out ?? undefined,
+      tokensCacheRead: r.tokens_cache_read ?? undefined,
+      tokensCacheWrite: r.tokens_cache_write ?? undefined,
+      costUsd: r.cost_usd ?? undefined,
+      model: r.model ?? undefined,
+      peakContextTokens: r.peak_context_tokens ?? undefined,
+      toolsUsed: r.tools_used ? JSON.parse(r.tools_used) : undefined,
+      firstAt: r.first_at ?? undefined,
+      lastAt: r.last_at ?? undefined,
+    };
+  }
+
+  /** One-time, idempotent migration: for sessions whose active_ms IS NULL,
+   * compute it from existing raw samples — `(count of raw samples that are active)
+   * * sampleIntervalMs`, where a sample is active when cpu>threshold OR active=1.
+   * Only touches NULL rows, so a live-accumulated activeMs is never overwritten and
+   * re-runs are no-ops. A single grouped UPDATE (the real DB has ~210k raw rows). */
+  backfillActiveMs(): void {
+    this.db
+      .query(
+        `UPDATE sessions SET active_ms = COALESCE((
+           SELECT COUNT(*) FROM samples
+           WHERE samples.session_key = sessions.session_key
+             AND samples.resolution = 'raw'
+             AND (COALESCE(samples.cpu, 0) > $threshold OR samples.active > 0)
+         ), 0) * $interval
+         WHERE active_ms IS NULL`,
+      )
+      .run({ $threshold: this.activeCpuThreshold, $interval: this.sampleIntervalMs });
   }
 
   private rowToWorkItem(r: any): WorkItem {
@@ -1414,6 +1521,7 @@ export class Store {
       attention: r.attention == null ? undefined : !!r.attention,
       ask: r.ask ?? undefined,
       suggestion: r.suggestion ?? undefined,
+      activeMs: r.active_ms ?? undefined,
     };
   }
 

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { ProviderPlugin, Enrichment, EnrichContext } from "./types.ts";
 import type { ProcInfo } from "../procscan.ts";
 import { extractClis, commandFromInput } from "../clis.ts";
+import { estimateCost, type SubSession } from "@mc/shared";
 
 /** Tiny stable string hash (djb2) -> base36. For WorkItem.itemKey (no crypto needed). */
 function hashKey(s: string): string {
@@ -272,20 +273,145 @@ export function addSubagentUsage(base: Enrichment, u: SubagentUsage): void {
   base.tokensCacheWrite = (base.tokensCacheWrite ?? 0) + u.tokensCacheWrite;
 }
 
-/** Per-session subagent token cache, keyed by sessionId. Kept module-level so it
- * survives across reporter ticks; one inner map per session ever enriched. */
-const subagentCaches = new Map<string, Map<string, SubagentUsage>>();
-function subagentCacheFor(sessionId: string): Map<string, SubagentUsage> {
-  let c = subagentCaches.get(sessionId);
-  if (!c) subagentCaches.set(sessionId, (c = new Map()));
-  return c;
+/** Derive the subagent's stable id from its transcript filename:
+ * `agent-<hash>.jsonl` → `<hash>`. Used only as a fallback when the transcript
+ * itself carries no `agentId`. Never throws — an off-convention name maps to its
+ * bare stem. */
+export function agentIdFromName(name: string): string {
+  return name.replace(/^agent-/, "").replace(/\.jsonl$/, "");
+}
+
+/** Scan a transcript for its self-reported `agentId` (present on entries in newer
+ * Claude) and the min/max entry timestamp. A single cheap pass so we don't widen
+ * {@link parseClaudeTranscript}'s return shape (which ripples through Session). */
+function scanSubagentMeta(text: string): { agentId?: string; firstAt?: number; lastAt?: number } {
+  let agentId: string | undefined;
+  let firstAt: number | undefined;
+  let lastAt: number | undefined;
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    let ev: any;
+    try {
+      ev = JSON.parse(t);
+    } catch {
+      continue;
+    }
+    if (!agentId && typeof ev?.agentId === "string") agentId = ev.agentId;
+    const ts = ev?.timestamp ? Date.parse(ev.timestamp) : NaN;
+    if (!Number.isNaN(ts)) {
+      if (firstAt === undefined || ts < firstAt) firstAt = ts;
+      if (lastAt === undefined || ts > lastAt) lastAt = ts;
+    }
+  }
+  return { agentId, firstAt, lastAt };
 }
 
 /**
- * Fold this session's subagent transcripts into `out` (mutates the token counters).
- * Never throws: a missing subagents dir (older Claude, or none spawned) or an
- * unreadable file degrades to the main-transcript totals — matching the enrich
- * contract that one bad file can't kill the host report.
+ * Build a {@link SubSession} from one subagent transcript. Pure: takes raw text
+ * plus the fallback `agentId` (the filename hash) and an optional `kind` (the
+ * subagent type, sourced from the `.meta.json` sidecar — it is NOT in the
+ * transcript). Reuses {@link parseClaudeTranscript} for the deduped token/tool
+ * counters, then adds the subagent-scoped fields (cost, peak context, time bounds).
+ */
+export function subSessionFromText(text: string, fallbackAgentId: string, kind?: string): SubSession {
+  const p = parseClaudeTranscript(text);
+  const { agentId, firstAt, lastAt } = scanSubagentMeta(text);
+  const tokensIn = p.tokensIn ?? 0;
+  const tokensOut = p.tokensOut ?? 0;
+  const tokensCacheRead = p.tokensCacheRead ?? 0;
+  const tokensCacheWrite = p.tokensCacheWrite ?? 0;
+  const s: SubSession = {
+    agentId: agentId ?? fallbackAgentId,
+    tokensIn,
+    tokensOut,
+    tokensCacheRead,
+    tokensCacheWrite,
+  };
+  if (kind) s.kind = kind;
+  if (p.model) s.model = p.model;
+  if (p.contextTokens) s.peakContextTokens = p.contextTokens;
+  if (p.toolsUsed?.length) s.toolsUsed = p.toolsUsed;
+  const cost = estimateCost(p.model, tokensIn, tokensOut, tokensCacheRead, tokensCacheWrite);
+  if (cost !== undefined) s.costUsd = cost;
+  if (firstAt !== undefined) s.firstAt = firstAt;
+  if (lastAt !== undefined) s.lastAt = lastAt;
+  return s;
+}
+
+/** One subagent transcript to break down: an append-stable cache `key`
+ * (path:mtime:size), the `agentId` fallback (filename hash), the `kind`
+ * (from the sidecar, when known), and a lazy `read()` invoked on a cache miss. */
+export type SubagentFile = { key: string; agentId: string; kind?: string; read: () => string };
+
+/**
+ * Compute one {@link SubSession} per subagent transcript, memoized per `key`.
+ * Cache contract mirrors {@link sumSubagentUsage}: unchanged files (same
+ * `path:mtime:size` key) are served without re-reading; keys absent this tick are
+ * evicted so the map can't grow without bound. Cache MUST be scoped per parent
+ * session.
+ */
+export function buildSubSessions(
+  files: SubagentFile[],
+  cache: Map<string, SubSession>,
+): SubSession[] {
+  const live = new Set<string>();
+  const out: SubSession[] = [];
+  for (const f of files) {
+    live.add(f.key);
+    let s = cache.get(f.key);
+    if (!s) {
+      s = subSessionFromText(f.read(), f.agentId, f.kind);
+      cache.set(f.key, s);
+    }
+    out.push(s);
+  }
+  for (const k of cache.keys()) if (!live.has(k)) cache.delete(k);
+  return out;
+}
+
+/** Sum the four token counters across a set of SubSessions (for the total-fold). */
+function sumSubSessions(subs: SubSession[]): SubagentUsage {
+  const total: SubagentUsage = { tokensIn: 0, tokensOut: 0, tokensCacheRead: 0, tokensCacheWrite: 0 };
+  for (const s of subs) {
+    total.tokensIn += s.tokensIn ?? 0;
+    total.tokensOut += s.tokensOut ?? 0;
+    total.tokensCacheRead += s.tokensCacheRead ?? 0;
+    total.tokensCacheWrite += s.tokensCacheWrite ?? 0;
+  }
+  return total;
+}
+
+/** Per-session SubSession cache (the itemized breakdown), keyed by sessionId. Kept
+ * module-level so it survives across reporter ticks; one inner map per session ever
+ * enriched. The fold reuses these SubSessions for the total, so a single cache
+ * memoizes both the breakdown and the token-sum. */
+const subSessionCaches = new Map<string, Map<string, SubSession>>();
+function subSessionCacheFor(sessionId: string): Map<string, SubSession> {
+  let c = subSessionCaches.get(sessionId);
+  if (!c) subSessionCaches.set(sessionId, (c = new Map()));
+  return c;
+}
+
+/** Read the `agentType` (the subagent's `kind`) from a transcript's `.meta.json`
+ * sidecar (`agent-<hash>.meta.json`). The type is NOT in the transcript itself —
+ * only the sidecar carries it. Returns undefined when absent/unreadable. */
+function agentTypeFromSidecar(subDir: string, transcriptName: string): string | undefined {
+  const metaPath = join(subDir, transcriptName.replace(/\.jsonl$/, ".meta.json"));
+  try {
+    const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    return typeof meta?.agentType === "string" ? meta.agentType : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Fold this session's subagent transcripts into `out`: sums their tokens into the
+ * headline counters (so totals stay main + Σ subagents) AND emits a per-subagent
+ * breakdown on `out.subSessions`. Never throws: a missing subagents dir (older
+ * Claude, or none spawned) or an unreadable file degrades to the main-transcript
+ * totals — matching the enrich contract that one bad file can't kill the host report.
  */
 async function foldSubagents(dir: string, sessionId: string, out: Enrichment): Promise<void> {
   const subDir = join(dir, sessionId, "subagents");
@@ -295,18 +421,28 @@ async function foldSubagents(dir: string, sessionId: string, out: Enrichment): P
   } catch {
     return; // no subagents dir
   }
-  const entries: SubagentEntry[] = [];
+  const files: SubagentFile[] = [];
   for (const name of names) {
     if (!name.endsWith(".jsonl")) continue;
     const p = join(subDir, name);
     try {
       const s = await stat(p);
-      entries.push({ key: `${p}:${s.mtimeMs}:${s.size}`, read: () => readFileSync(p, "utf8") });
+      files.push({
+        key: `${p}:${s.mtimeMs}:${s.size}`,
+        agentId: agentIdFromName(name),
+        kind: agentTypeFromSidecar(subDir, name),
+        read: () => readFileSync(p, "utf8"),
+      });
     } catch {
       /* skip unreadable */
     }
   }
-  if (entries.length) addSubagentUsage(out, sumSubagentUsage(entries, subagentCacheFor(sessionId)));
+  if (!files.length) return;
+  const subs = buildSubSessions(files, subSessionCacheFor(sessionId));
+  // Keep the total-fold (headline = main + Σ subagents) sourced from the same
+  // SubSessions, so the breakdown and the total can never disagree.
+  addSubagentUsage(out, sumSubSessions(subs));
+  out.subSessions = subs;
 }
 
 /** Shape of the pid->sessionId map file, incl. the freshness timestamps it carries. */

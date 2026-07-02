@@ -3,7 +3,7 @@ import { resumeCommand, type PersistedSession } from "@mc/shared";
 import { useHistory, historyQueryString, type HistoryFilter } from "./useHistory.ts";
 import { useFacets } from "./useQuery.ts";
 import { FacetBar, type FacetSel } from "./FacetBar.tsx";
-import { classOf, charName, gold, xpOf, levelOf, type FateState } from "./rpg.ts";
+import { classOf, charName, gold, xpOf, levelOf, activeFraction, type FateState } from "./rpg.ts";
 import { fmtUptime, fmtTokens, fmtDate, dayLabel, fmtAgo } from "./format.ts";
 import { useLex } from "./lexicon.ts";
 
@@ -38,6 +38,7 @@ function Row({ s, now, lex, onOpen }: { s: PersistedSession; now: number; lex: R
   const job = lex.jobs[s.provider] ?? lex.jobFallback;
   const title = s.subject || s.summary || charName(s);
   const dur = s.endedAt ? fmtUptime(s.startedAt, s.endedAt) : "live";
+  const active = activeFraction(s);
   const resume = resumeCommand(s);
   return (
     <div className="win rec" onClick={() => onOpen(s.sessionKey)} style={{ ["--hue" as any]: cls.hue }}>
@@ -54,6 +55,7 @@ function Row({ s, now, lex, onOpen }: { s: PersistedSession; now: number; lex: R
         <span className="k">{fmtAgo(s.endedAt ?? s.lastSeenAt, now)}</span>
       </span>
       <span className="col" data-align="right"><span>{dur}</span><span className="k">dur</span></span>
+      <span className="col" data-align="right"><span>{active != null ? `${Math.round(active * 100)}%` : "—"}</span><span className="k">active</span></span>
       <span className="col" data-align="right"><span>{fmtTokens(xpOf(s))}</span><span className="k">{lex.xp.toLowerCase()}</span></span>
       <span className="col gil" data-align="right"><span>{lex.gilGlyph}{gold(s.costUsd)}</span><span className="k">{lex.gil}</span></span>
       <span className="fate" data-f={s.state}>{lex.fate[s.state as FateState] ?? s.state}</span>
@@ -144,6 +146,7 @@ export function HallOfRecords({
             <span className="th" /><span className="th">{/* title */}</span>
             <Th label="Started" col="started" sort={sort} onSort={onSort} align="right" />
             <span className="th" data-align="right">Dur</span>
+            <span className="th" data-align="right">Active</span>
             <Th label={lex.xp} col="tokens" sort={sort} onSort={onSort} align="right" />
             <Th label={lex.gil} col="cost" sort={sort} onSort={onSort} align="right" />
             <span className="th">{lex.facet.fate}</span>

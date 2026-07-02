@@ -1,7 +1,8 @@
 import { useState, useRef, useLayoutEffect, type MouseEvent } from "react";
 import type { Session } from "@mc/shared";
-import { classOf, levelOf, levelProgress, hpOf, battleStateOf, charName, gold, classifyCrash } from "./rpg.ts";
-import { fmtTokens, fmtAgo } from "./format.ts";
+import { classOf, levelOf, levelProgress, hpOf, battleStateOf, charName, gold, classifyCrash, subSplit, subTokens } from "./rpg.ts";
+import { fmtTokens, fmtAgo, fmtUptime, fmtCost } from "./format.ts";
+import type { SubSession } from "@mc/shared";
 import { useLex } from "./lexicon.ts";
 
 function Bar({ kind, label, pct, value, low }: { kind: "hp" | "mp"; label: string; pct: number; value: string; low?: boolean }) {
@@ -12,6 +13,62 @@ function Bar({ kind, label, pct, value, low }: { kind: "hp" | "mp"; label: strin
         <span className={`fill ${kind}${low ? " low" : ""}`} style={{ width: `${Math.round(pct * 100)}%` }} />
       </span>
       <span className="val">{value}</span>
+    </div>
+  );
+}
+
+/** One subagent row in the expandable list. Click-to-expand into a small detail
+ * block (in/out/cache tokens, peak context, model, duration). Mirrors the
+ * TemplateCard `open`-state inline-expand pattern. */
+function SubagentRow({ sub }: { sub: SubSession }) {
+  const [open, setOpen] = useState(false);
+  const label = sub.kind || sub.agentId.slice(0, 8);
+  const dur = sub.firstAt != null && sub.lastAt != null && sub.lastAt > sub.firstAt
+    ? fmtUptime(sub.firstAt, sub.lastAt) : null;
+  return (
+    <div className="subrow" data-open={open || undefined}>
+      <button className="subrow-head" onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}>
+        <span className="tw">{open ? "▾" : "▸"}</span>
+        <span className="nm" title={sub.agentId}>{label}</span>
+        <span className="c gil">{fmtCost(sub.costUsd)}</span>
+        <span className="c tok">{fmtTokens(subTokens(sub))}</span>
+        <span className="c tools" title={(sub.toolsUsed ?? []).join(", ")}>
+          {(sub.toolsUsed ?? []).slice(0, 3).join(", ") || "—"}
+          {(sub.toolsUsed?.length ?? 0) > 3 ? ` +${sub.toolsUsed!.length - 3}` : ""}
+        </span>
+      </button>
+      {open && (
+        <div className="subrow-detail">
+          <span>in {fmtTokens(sub.tokensIn)} · out {fmtTokens(sub.tokensOut)} · cache {fmtTokens((sub.tokensCacheRead ?? 0) + (sub.tokensCacheWrite ?? 0))}</span>
+          <span>
+            {sub.peakContextTokens != null && `peak ctx ${fmtTokens(sub.peakContextTokens)}`}
+            {sub.model && ` · ${sub.model.replace(/^claude-|-\d.*$/g, "")}`}
+            {dur && ` · ${dur}`}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Collapsed "▸ N subagents · $Y (Z%)  main $X" row that expands into the list. */
+function SubagentList({ s }: { s: Session }) {
+  const [open, setOpen] = useState(false);
+  const subs = s.subSessions ?? [];
+  if (subs.length === 0) return null;
+  const { subCount, subCost, mainCost, subPct } = subSplit(s);
+  return (
+    <div className="subs" data-open={open || undefined}>
+      <button className="subs-head" onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}>
+        <span className="tw">{open ? "▾" : "▸"}</span>
+        <span className="lbl">{subCount} subagent{subCount === 1 ? "" : "s"} · {fmtCost(subCost)} ({subPct}%)</span>
+        <span className="main">main {fmtCost(mainCost)}</span>
+      </button>
+      {open && (
+        <div className="subs-list">
+          {subs.map((sub) => <SubagentRow key={sub.agentId} sub={sub} />)}
+        </div>
+      )}
     </div>
   );
 }
@@ -146,7 +203,9 @@ export function CharacterCard({
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
         <span className="tag" data-state={state}>{lex.state[state]}</span>
         <span className="meta">
+          {s.active && <span className="pip" title="active now">◉</span>}
           <span>{s.hostLabel}</span>
+          <span title="lifespan">·{fmtUptime(s.startedAt, now)}</span>
           <span>·{fmtAgo(s.lastActivityAt ?? s.startedAt, now)}</span>
         </span>
       </div>
@@ -177,6 +236,8 @@ export function CharacterCard({
           </span>
         </div>
       )}
+
+      {!compact && <SubagentList s={s} />}
 
       <div className="char-actions">
         <input
