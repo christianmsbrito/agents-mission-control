@@ -55,6 +55,9 @@ export interface ProviderPlugin {
   defaultCategory: string;
   /** Is this process one of mine? */
   matchProcess(p: ProcInfo): boolean;
+  /** Set when enrich() reads `ctx.openFiles`. Without it the reporter skips the
+   * per-tick `lsof` and serves a cached cwd (empty `openFiles`). */
+  needsOpenFiles?: boolean;
   /** Best-effort read of the live session file. Never throws to caller. */
   enrich?(p: ProcInfo, cwd: string | null, ctx: EnrichContext): Promise<Enrichment>;
 }

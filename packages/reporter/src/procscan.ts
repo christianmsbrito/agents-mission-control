@@ -104,6 +104,22 @@ export async function inspectProc(pid: number): Promise<ProcInspection> {
   }
 }
 
+// An agent's cwd is fixed for its lifetime, so one `lsof` per pid is enough.
+const cwdCache = new Map<number, string | null>();
+
+/** Cached cwd-only inspect (`openFiles` empty). A failed lookup is retried next tick. */
+export async function inspectCwdCached(pid: number): Promise<ProcInspection> {
+  if (cwdCache.has(pid)) return { cwd: cwdCache.get(pid)!, openFiles: [] };
+  const { cwd } = await inspectProc(pid);
+  if (cwd) cwdCache.set(pid, cwd);
+  return { cwd, openFiles: [] };
+}
+
+/** Drop cwd entries for pids no longer present (pid reuse + bounded memory). */
+export function pruneCwdCache(livePids: Set<number>): void {
+  for (const pid of cwdCache.keys()) if (!livePids.has(pid)) cwdCache.delete(pid);
+}
+
 /** Back-compat: cwd only. */
 export async function cwdOf(pid: number): Promise<string | null> {
   return (await inspectProc(pid)).cwd;

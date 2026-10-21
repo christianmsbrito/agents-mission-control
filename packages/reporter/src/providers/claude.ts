@@ -453,14 +453,52 @@ function sumSubSessions(subs: SubSession[]): SubagentUsage {
 }
 
 /** Per-session SubSession cache (the itemized breakdown), keyed by sessionId. Kept
- * module-level so it survives across reporter ticks; one inner map per session ever
- * enriched. The fold reuses these SubSessions for the total, so a single cache
- * memoizes both the breakdown and the token-sum. */
-const subSessionCaches = new Map<string, Map<string, { sub: SubSession; errored: boolean }>>();
-function subSessionCacheFor(sessionId: string): Map<string, { sub: SubSession; errored: boolean }> {
+ * module-level so it survives across reporter ticks. The fold reuses these
+ * SubSessions for the total, so a single cache memoizes both the breakdown and the
+ * token-sum. Evicted by {@link evictIdle} once the session stops being enriched. */
+const subSessionCaches = new Map<string, { at: number; cache: Map<string, { sub: SubSession; errored: boolean }> }>();
+function subSessionCacheFor(sessionId: string, now: number): Map<string, { sub: SubSession; errored: boolean }> {
   let c = subSessionCaches.get(sessionId);
-  if (!c) subSessionCaches.set(sessionId, (c = new Map()));
-  return c;
+  if (!c) subSessionCaches.set(sessionId, (c = { at: now, cache: new Map() }));
+  c.at = now;
+  return c.cache;
+}
+
+/** The parse of one main transcript, reused until the file changes. */
+type TranscriptParse = { key: string; parsed: Enrichment; completed: Set<string> };
+
+/**
+ * Main-transcript parse cache, keyed by path, valid while `path:mtime:size` holds.
+ * The reporter ticks every few seconds over every live session, and a long session's
+ * transcript runs to tens of MB: re-parsing all of them each tick was the reporter's
+ * main CPU cost. Now an idle session costs one stat() per tick.
+ */
+const transcriptCache = new Map<string, TranscriptParse & { at: number }>();
+
+/** Parse `text` once per transcript version. `read` runs only on a miss. Returns a
+ * shallow copy, because enrich() mutates its result (subagent fold, status merge). */
+export function cachedTranscriptParse(
+  path: string,
+  key: string,
+  read: () => string,
+  now: number,
+  cache: Map<string, TranscriptParse & { at: number }> = transcriptCache,
+): { parsed: Enrichment; completed: Set<string> } {
+  let ent = cache.get(path);
+  if (!ent || ent.key !== key) {
+    const text = read();
+    ent = { key, parsed: parseClaudeTranscript(text), completed: completedToolUseIds(text), at: now };
+    cache.set(path, ent);
+  }
+  ent.at = now;
+  return { parsed: { ...ent.parsed }, completed: ent.completed };
+}
+
+/** Drop cache entries no tick has touched for a minute: their session ended. */
+const CACHE_IDLE_MS = 60_000;
+function evictIdle(now: number): void {
+  for (const [k, v] of transcriptCache) if (now - v.at > CACHE_IDLE_MS) transcriptCache.delete(k);
+  for (const [k, v] of subSessionCaches) if (now - v.at > CACHE_IDLE_MS) subSessionCaches.delete(k);
 }
 
 /** How long since a subagent transcript's last write still counts as "fresh"
@@ -526,14 +564,14 @@ export function subagentFilesInDir(subDir: string): SubagentFile[] {
  * degrades to the main-transcript totals — matching the enrich contract that one
  * bad file can't kill the host report.
  *
- * `ctx` carries the live status inputs: the parent transcript text (to see which
- * Task calls have returned), whether the parent is currently active, and `now`.
+ * `ctx` carries the live status inputs: which Task calls have returned in the
+ * parent transcript, whether the parent is currently active, and `now`.
  */
 async function foldSubagents(
   dir: string,
   sessionId: string,
   out: Enrichment,
-  ctx: { parentText: string; parentActive: boolean; now: number },
+  ctx: { completed: Set<string>; parentActive: boolean; now: number },
 ): Promise<void> {
   const subDir = join(dir, sessionId, "subagents");
   let names: string[];
@@ -562,11 +600,11 @@ async function foldSubagents(
     }
   }
   if (!files.length) return;
-  const subs = buildSubSessions(files, subSessionCacheFor(sessionId), {
+  const subs = buildSubSessions(files, subSessionCacheFor(sessionId, ctx.now), {
     now: ctx.now,
     freshMs: SUBAGENT_FRESH_MS,
     parentActive: ctx.parentActive,
-    completed: completedToolUseIds(ctx.parentText),
+    completed: ctx.completed,
   });
   // Keep the total-fold (headline = main + Σ subagents) sourced from the same
   // SubSessions, so the breakdown and the total can never disagree.
@@ -658,13 +696,21 @@ export const claudePlugin: ProviderPlugin = {
     }
     if (!file) return statusOnly(meta, now, ttl);
 
-    const mainText = await Bun.file(file).text();
-    const out = parseClaudeTranscript(mainText);
+    evictIdle(now);
+    let st;
     try {
-      out.lastActivityAt = (await stat(file)).mtimeMs;
+      st = await stat(file);
     } catch {
-      /* ignore */
+      return statusOnly(meta, now, ttl); // transcript vanished between exists() and stat()
     }
+    const path = file;
+    const { parsed: out, completed } = cachedTranscriptParse(
+      path,
+      `${st.mtimeMs}:${st.size}`,
+      () => readFileSync(path, "utf8"),
+      now,
+    );
+    out.lastActivityAt = st.mtimeMs;
     const status = statusOnly(meta, now, ttl);
     // Fold in subagent transcripts (their tokens live in a sibling dir, absent from
     // the main file) so subagent-driven sessions report their true cost, and emit a
@@ -673,7 +719,7 @@ export const claudePlugin: ProviderPlugin = {
     // transcript (which Task calls returned) + whether the parent is active now.
     if (meta?.sessionId) {
       await foldSubagents(dir, meta.sessionId, out, {
-        parentText: mainText,
+        completed,
         parentActive: status.active === true,
         now,
       });

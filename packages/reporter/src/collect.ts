@@ -7,6 +7,9 @@ import type { Summarizer } from "./summarizer.ts";
 /** Override the process inspector / clock / summarizer / focus probe in tests. */
 export type Deps = {
   inspect: (pid: number) => Promise<ProcInspection>;
+  /** Cheaper inspect for plugins that only need the cwd (no `needsOpenFiles`).
+   * Falls back to `inspect` when absent. */
+  inspectCwd?: (pid: number) => Promise<ProcInspection>;
   now: () => number;
   summarizer?: Summarizer;
   focusedTtys?: () => Promise<Set<string>>;
@@ -35,7 +38,8 @@ export async function collect(
     const plugin = matchProvider(p);
     if (!plugin) continue;
 
-    const { cwd, openFiles } = await deps.inspect(p.pid);
+    const inspect = plugin.needsOpenFiles ? deps.inspect : (deps.inspectCwd ?? deps.inspect);
+    const { cwd, openFiles } = await inspect(p.pid);
     const startedAt = now - p.uptimeSec * 1000;
 
     let enrichment: Awaited<ReturnType<NonNullable<typeof plugin.enrich>>> = {};

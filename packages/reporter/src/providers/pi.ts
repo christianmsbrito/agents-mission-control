@@ -148,6 +148,7 @@ async function findSession(home: string, cwd: string | null, startedAt: number):
 export const piPlugin: ProviderPlugin = {
   id: "pi",
   defaultCategory: "personal",
+  needsOpenFiles: true, // finds its session file via lsof
   matchProcess(p: ProcInfo) {
     return /(^|\/)pi(\s|$)/.test(p.args) || p.comm === "pi";
   },

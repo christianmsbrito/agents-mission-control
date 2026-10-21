@@ -1,6 +1,6 @@
-import type { ReporterMsg, ServerToReporterMsg } from "@mc/shared";
+import type { ItermTab, ReporterMsg, ServerToReporterMsg } from "@mc/shared";
 import { loadConfig } from "./config.ts";
-import { scanProcesses, inspectProc, templateIdOf, pruneTemplateIdCache, type ProcInfo } from "./procscan.ts";
+import { scanProcesses, inspectProc, inspectCwdCached, pruneCwdCache, templateIdOf, pruneTemplateIdCache, type ProcInfo } from "./procscan.ts";
 import { collect, type Deps } from "./collect.ts";
 import { Summarizer, anthropicGenerator } from "./summarizer.ts";
 import { focusPid, sendText, focusedTtys } from "./focus.ts";
@@ -25,7 +25,7 @@ const resolveTemplate = (p: ProcInfo): Promise<string | null> | string | null =>
   }
   return templateIdOf(p.pid); // env fallback (Linux /proc)
 };
-const deps: Deps = { inspect: inspectProc, now: () => Date.now(), summarizer, focusedTtys, templateId: resolveTemplate };
+const deps: Deps = { inspect: inspectProc, inspectCwd: inspectCwdCached, now: () => Date.now(), summarizer, focusedTtys, templateId: resolveTemplate };
 console.log(
   summarizer.active
     ? `[reporter] LLM recaps on (${cfg.summaries.model})`
@@ -35,6 +35,18 @@ console.log(
 let ws: WebSocket | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
 let knownPids = new Set<number>(); // agent pids from the last scan — only these may be killed
+
+// The iTerm tab list only feeds the deploy form's target picker, and each read is an
+// AppleScript round trip that also wakes iTerm. Refresh it every 30s, not every
+// tick; a spawn clears it so a new pane shows up on the next tick.
+const ITERM_TABS_TTL_MS = 30_000;
+let itermTabs: { at: number; tabs: ItermTab[] } | null = null;
+async function cachedItermTabs(): Promise<ItermTab[]> {
+  if (!itermTabs || Date.now() - itermTabs.at > ITERM_TABS_TTL_MS) {
+    itermTabs = { at: Date.now(), tabs: await listItermTabs() };
+  }
+  return itermTabs.tabs;
+}
 
 function send(msg: ReporterMsg) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -46,11 +58,12 @@ async function tick() {
     const report = await collect(procs, cfg, deps);
     knownPids = new Set(report.sessions.map((s) => s.pid));
     pruneTemplateIdCache(knownPids);
+    pruneCwdCache(knownPids);
     // drop tty→template entries whose tty no longer has a live process (tty reuse)
     const liveTtys = new Set(procs.map((p) => p.tty).filter(Boolean) as string[]);
     for (const tty of templateByTty.keys()) if (!liveTtys.has(tty)) templateByTty.delete(tty);
     report.tmuxWindows = await listWindows(); // best-effort; [] when tmux isn't running
-    report.itermTabs = await listItermTabs(); // best-effort; [] off-darwin / iTerm down
+    report.itermTabs = await cachedItermTabs(); // best-effort; [] off-darwin / iTerm down
     send({ type: "report", report });
   } catch (err) {
     console.error("[reporter] tick error:", err);
@@ -103,6 +116,7 @@ function connect() {
         console.log(`[reporter] spawn template=${msg.templateId} backend=${useIterm ? "iterm2" : "tmux"} -> ${r.ok ? `${r.windowId ?? ""}/${r.paneId} tty=${r.tty ?? "?"}` : "FAILED:" + r.error}`);
         // remember the pane tty so the next scan tags this troop to its template
         if (r.ok && r.tty) templateByTty.set(r.tty, msg.templateId);
+        itermTabs = null; // the new pane should appear in the tab list next tick
         send({ type: "spawned", ok: r.ok, templateId: msg.templateId, hostId: cfg.hostId,
                windowId: r.windowId, paneId: r.paneId, error: r.error, commandId: msg.commandId });
       });

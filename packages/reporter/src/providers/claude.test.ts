@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import {
   parseClaudeTranscript,
+  cachedTranscriptParse,
   sumSubagentUsage,
   addSubagentUsage,
   subSessionFromText,
@@ -291,4 +292,24 @@ test("totals invariant: main token totals equal main-only + Σ subSessions", () 
   expect(base.tokensCacheWrite).toBe(mainOnly.tokensCacheWrite + sum.tokensCacheWrite);
   // and main-only = total − Σ subSessions (the documented reconstruction)
   expect(base.tokensIn - sum.tokensIn).toBe(mainOnly.tokensIn);
+});
+
+test("cachedTranscriptParse re-reads only when the file key changes, and hands out copies", () => {
+  const cache = new Map();
+  let reads = 0;
+  const v1 = usageLine("m1", { tokensIn: 10, tokensOut: 5 });
+  const read = (text: string) => () => (reads++, text);
+
+  const a = cachedTranscriptParse("/t.jsonl", "1:100", read(v1), 0, cache);
+  const b = cachedTranscriptParse("/t.jsonl", "1:100", read(v1), 3000, cache);
+  expect(reads).toBe(1); // unchanged file: served from cache
+  expect(b.parsed.tokensIn).toBe(10);
+
+  a.parsed.tokensIn = 999; // enrich() mutates its result; the cache must not see it
+  expect(cachedTranscriptParse("/t.jsonl", "1:100", read(v1), 6000, cache).parsed.tokensIn).toBe(10);
+
+  const v2 = v1 + "\n" + usageLine("m2", { tokensIn: 7 });
+  const c = cachedTranscriptParse("/t.jsonl", "2:200", read(v2), 9000, cache);
+  expect(reads).toBe(2); // grown file: re-parsed
+  expect(c.parsed.tokensIn).toBe(17);
 });

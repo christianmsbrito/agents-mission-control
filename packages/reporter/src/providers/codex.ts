@@ -189,24 +189,64 @@ async function stateFor(home: string, sessionId: string | null, cwd: string | nu
   return { attention: false };
 }
 
+// Per-tick caches. Codex rarely holds its rollout open, so the fallback lookup
+// (a recursive scan of ~/.codex/sessions plus first-line reads) used to run for
+// every codex process every tick, followed by a full re-parse of the rollout.
+const ROLLOUT_LOOKUP_TTL_MS = 30_000; // a new session in the same cwd shows up within this
+const CACHE_IDLE_MS = 60_000;
+const rolloutByPid = new Map<number, { path: string | null; resolvedAt: number; seenAt: number }>();
+const parseCache = new Map<string, { key: string; parsed: Enrichment; seenAt: number }>();
+
+function evictIdle(now: number): void {
+  for (const [k, v] of rolloutByPid) if (now - v.seenAt > CACHE_IDLE_MS) rolloutByPid.delete(k);
+  for (const [k, v] of parseCache) if (now - v.seenAt > CACHE_IDLE_MS) parseCache.delete(k);
+}
+
+async function cachedFindRollout(pid: number, home: string, cwd: string | null, now: number): Promise<string | null> {
+  const hit = rolloutByPid.get(pid);
+  if (hit && now - hit.resolvedAt < ROLLOUT_LOOKUP_TTL_MS) {
+    hit.seenAt = now;
+    return hit.path;
+  }
+  // misses are cached too: a codex process with no rollout (e.g. the ChatGPT app's
+  // embedded one) would otherwise rescan every tick
+  const path = await findRollout(home, cwd);
+  rolloutByPid.set(pid, { path, resolvedAt: now, seenAt: now });
+  return path;
+}
+
 export const codexPlugin: ProviderPlugin = {
   id: "codex",
   defaultCategory: "review",
+  needsOpenFiles: true, // finds its rollout file via lsof
   matchProcess(p: ProcInfo) {
     return /(^|\/)codex(\s|$)/.test(p.args) || p.comm === "codex";
   },
-  async enrich(_p, cwd, ctx: EnrichContext): Promise<Enrichment> {
+  async enrich(p, cwd, ctx: EnrichContext): Promise<Enrichment> {
+    const now = ctx.now ?? Date.now();
+    evictIdle(now);
     // Prefer the rollout the process has open (exact, disambiguates same-cwd).
     const open = ctx.openFiles.find((f) => /rollout-.*\.jsonl$/.test(f) && f.includes(".codex"));
-    const file = open ?? (await findRollout(ctx.home, cwd));
+    let file = open ?? (await cachedFindRollout(p.pid, ctx.home, cwd, now));
     if (!file) return {};
-    const text = await Bun.file(file).text();
-    const out = parseCodexRollout(text);
-    try {
-      out.lastActivityAt = (await stat(file)).mtimeMs;
-    } catch {
-      /* ignore */
+    let st = await stat(file).catch(() => null);
+    if (!st && !open) {
+      // a cached path that vanished (rollout moved/removed): resolve afresh once
+      rolloutByPid.delete(p.pid);
+      file = await cachedFindRollout(p.pid, ctx.home, cwd, now);
+      st = file ? await stat(file).catch(() => null) : null;
     }
+    if (!file || !st) return {};
+    // Re-parse only when the rollout changed; copy, since the fields below mutate it.
+    const key = `${st.mtimeMs}:${st.size}`;
+    let ent = parseCache.get(file);
+    if (!ent || ent.key !== key) {
+      ent = { key, parsed: parseCodexRollout(await Bun.file(file).text()), seenAt: now };
+      parseCache.set(file, ent);
+    }
+    ent.seenAt = now;
+    const out: Enrichment = { ...ent.parsed };
+    out.lastActivityAt = st.mtimeMs;
     // session id is the uuid embedded in rollout-<ts>-<uuid>.jsonl
     const sid = file.match(/([0-9a-f]{8}-[0-9a-f-]+)\.jsonl$/)?.[1] ?? null;
     if (sid) out.providerSessionId = sid;
